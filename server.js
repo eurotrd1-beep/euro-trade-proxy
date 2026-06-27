@@ -376,6 +376,88 @@ const tv = new TVClient();
 // Save all candles to disk every 60 s, regardless of user activity
 setInterval(() => tv._saveAll(), 60_000);
 
+// ── OTC Candle Store ──────────────────────────────────────────────────────────
+
+const otcCandles = {};  // key `SYM_iv` → Candle[]
+const otcCurrent = {};  // key `SYM_iv` → building candle
+
+function _otcLoadAll() {
+  try {
+    fs.readdirSync(DATA_DIR)
+      .filter(f => f.startsWith('otc_') && f.endsWith('.json'))
+      .forEach(file => {
+        try {
+          const d = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+          if (d.key && Array.isArray(d.candles) && d.candles.length) {
+            otcCandles[d.key] = d.candles;
+            console.log(`[OTC] loaded ${d.candles.length} candles for ${d.key}`);
+          }
+        } catch (_) {}
+      });
+  } catch (_) {}
+}
+_otcLoadAll();
+
+function _otcSave(key) {
+  try {
+    const c = otcCandles[key];
+    if (c && c.length) {
+      fs.writeFileSync(
+        path.join(DATA_DIR, 'otc_' + key.replace(/[:/]/g, '_') + '.json'),
+        JSON.stringify({ key, candles: c })
+      );
+    }
+  } catch (_) {}
+}
+
+/**
+ * Called by OTCScraper on every new tick.
+ * Builds 1m / 5m / 15m / 1h candles and broadcasts price to WS clients.
+ */
+function otcTick(sym, price, tsSeconds) {
+  ['1m', '5m', '15m', '1h'].forEach(iv => {
+    const sec = ivToSeconds(iv);
+    const key = `${sym}_${iv}`;
+    const cT  = Math.floor(tsSeconds / sec) * sec;
+    const cur = otcCurrent[key];
+
+    if (!cur || cur.t !== cT) {
+      // Finalize previous candle
+      if (cur) {
+        if (!otcCandles[key]) otcCandles[key] = [];
+        otcCandles[key].push({ t: cur.t, o: cur.o, h: cur.h, l: cur.l, c: cur.c });
+        if (otcCandles[key].length > 500) otcCandles[key].shift();
+        _otcSave(key);
+      }
+      // Open new candle
+      otcCurrent[key] = { t: cT, o: price, h: price, l: price, c: price };
+    } else {
+      if (price > cur.h) cur.h = price;
+      if (price < cur.l) cur.l = price;
+      cur.c = price;
+    }
+  });
+
+  // Broadcast to any subscribed WS client
+  broadcastPrice(sym, price);
+}
+
+function otcGetCandles(sym, iv) {
+  const key = `${sym}_${iv}`;
+  const hist = otcCandles[key] || [];
+  const cur  = otcCurrent[key];
+  return cur ? [...hist, { ...cur }] : [...hist];
+}
+
+// Start OTC scraper (no-op if PO_EMAIL / PO_PASSWORD not set)
+try {
+  const { OTCScraper } = require('./otc-scraper');
+  const otcScraper = new OTCScraper({ onTick: otcTick });
+  otcScraper.start();
+} catch (err) {
+  console.warn('[OTC] scraper module error:', err.message);
+}
+
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
@@ -412,6 +494,15 @@ const server = http.createServer((req, res) => {
     const raw   = url.searchParams.get('symbol') || 'OANDA:EURUSD';
     const tvSym = normalizeSymbol(raw);
     json({ price: tv.getPrice(tvSym), connected: tv.isConnected() });
+    return;
+  }
+
+  // ── GET /api/po/candles?symbol=EURUSD_OTC&interval=1m ────────────────────
+  if (url.pathname === '/api/po/candles') {
+    const sym     = url.searchParams.get('symbol')   || 'EURUSD_OTC';
+    const iv      = url.searchParams.get('interval') || '1m';
+    const candles = otcGetCandles(sym, iv);
+    json({ status: candles.length ? 'ok' : 'loading', candles });
     return;
   }
 
