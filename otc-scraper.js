@@ -172,6 +172,7 @@ class OTCScraper {
   destroy() {
     this._destroyed = true;
     clearTimeout(this._restartTimer);
+    clearInterval(this._heartbeatTimer);
     if (this._browser) this._browser.close().catch(() => {});
   }
 
@@ -232,6 +233,20 @@ class OTCScraper {
 
       console.log('[OTC] Trading page loaded — price stream active.');
       this._ready = true;
+
+      // Keep browser session alive: ping page every 5 min
+      this._heartbeatTimer = setInterval(async () => {
+        if (this._destroyed || !this._page) return;
+        try {
+          const alive = await this._page.evaluate(() => !!document.body);
+          if (!alive) throw new Error('page dead');
+          console.log('[OTC] heartbeat ok');
+        } catch (e) {
+          console.warn('[OTC] heartbeat failed — restarting:', e.message);
+          clearInterval(this._heartbeatTimer);
+          this._scheduleRestart(5000);
+        }
+      }, 5 * 60 * 1000);
 
     } catch (err) {
       console.error('[OTC] Login/navigation error:', err.message);
