@@ -437,9 +437,9 @@ server.listen(PORT, () => {
   console.log(`Proxy ready on http://localhost:${PORT}`);
   console.log('TV WebSocket connecting…');
 
-  // Keep-alive: ping self every 14 min so Render free tier never sleeps
+  // Keep-alive: ping self every 5 min so Render free tier never sleeps
   setInterval(() => {
     fetch('https://euro-trade-proxy.onrender.com/health')
       .catch(() => {});
-  }, 14 * 60 * 1000);
+  }, 5 * 60 * 1000);
 });
