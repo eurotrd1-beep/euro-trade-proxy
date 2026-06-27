@@ -141,8 +141,31 @@ class OTCScraper {
         return;
       }
       console.log(`[OTC:${this._brokerName}] Launching browser for ${this._chartUrl}`);
+
+      // Find whatever Chrome version was installed by puppeteer browsers install
+      let executablePath;
+      try {
+        const { execSync } = require('child_process');
+        const result = execSync(
+          'find /opt/render/.cache/puppeteer/chrome -name "chrome" -type f 2>/dev/null | head -1'
+        ).toString().trim();
+        if (result) { executablePath = result; console.log('[OTC] Chrome found at:', result); }
+      } catch (_) {}
+      // Also try system Chrome paths
+      if (!executablePath) {
+        const sysPaths = [
+          '/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium',
+          '/usr/local/bin/chromium',
+        ];
+        const fs2 = require('fs');
+        executablePath = sysPaths.find(p => { try { return fs2.existsSync(p); } catch(_){return false;} });
+      }
+      if (executablePath) console.log('[OTC] Using Chrome:', executablePath);
+      else console.warn('[OTC] No Chrome found — trying puppeteer default');
+
       this._browser = await puppeteer.launch({
         headless: true,
+        executablePath: executablePath || undefined,
         args: [
           '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
