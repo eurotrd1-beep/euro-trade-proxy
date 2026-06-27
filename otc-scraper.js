@@ -248,34 +248,39 @@ class OTCScraper {
         this._status = 'filling login form';
         console.log(`[OTC:${this._brokerName}] Login page detected — filling credentials`);
 
-        // Wait for any email/username field
-        await page.waitForSelector(
-          'input[type="email"], input[name="email"], input[name="username"], input[type="text"]',
-          { timeout: 20000 }
-        ).catch(() => {});
+        // Wait for form to appear
+        await page.waitForSelector('input[type="password"]', { timeout: 20000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 1000));
 
-        // Fill email
-        const emailSel = 'input[type="email"], input[name="email"], input[name="username"]';
-        try {
-          await page.focus(emailSel);
-          await page.keyboard.type(email, { delay: 60 });
-        } catch (_) {
-          try {
-            await page.focus('input[type="text"]');
-            await page.keyboard.type(email, { delay: 60 });
-          } catch (_2) {}
+        // Use React-compatible native setter to fill fields and dispatch events
+        await page.evaluate((em, pw) => {
+          function fill(sel, val) {
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            setter.call(el, val);
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+            return true;
+          }
+          fill('input[type="email"], input[name="email"], input[name="login"]', em)
+            || fill('input[type="text"]', em);
+          fill('input[type="password"]', pw);
+        }, email, password).catch(() => {});
+
+        await new Promise(r => setTimeout(r, 800));
+
+        // Submit via button click OR Enter key
+        const clicked = await page.evaluate(() => {
+          const btn = document.querySelector('button[type="submit"], input[type="submit"], form button, .btn-login');
+          if (btn) { btn.click(); return true; }
+          return false;
+        }).catch(() => false);
+        if (!clicked) {
+          await page.focus('input[type="password"]').catch(() => {});
+          await page.keyboard.press('Enter');
         }
-
-        // Fill password
-        try {
-          await page.focus('input[type="password"]');
-          await page.keyboard.type(password, { delay: 60 });
-        } catch (_) {}
-
-        // Submit
-        try {
-          await page.click('button[type="submit"], input[type="submit"], form button, .btn-login, .auth-button');
-        } catch (_) {}
 
         this._status = 'waiting for post-login navigation';
         await page.waitForNavigation({ waitUntil: 'load', timeout: 40000 }).catch(() => {});
