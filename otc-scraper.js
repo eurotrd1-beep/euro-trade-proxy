@@ -280,7 +280,12 @@ class OTCScraper {
 
         // Navigate to the actual chart URL after login
         if (currentUrl !== this._chartUrl) {
-          await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
+          try {
+            await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
+          } catch (gotoErr) {
+            if (!gotoErr.message.toLowerCase().includes('detach')) throw gotoErr;
+            console.log(`[OTC:${this._brokerName}] Redirect on chart nav (frame detached) — continuing`);
+          }
         }
       }
 
