@@ -259,38 +259,37 @@ class OTCScraper {
         this._status = 'filling login form';
         console.log(`[OTC:${this._brokerName}] Login page detected — filling credentials`);
 
-        // Wait for form to appear
+        // Wait for form inputs to appear
         await page.waitForSelector('input[type="password"]', { timeout: 20000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 1000));
 
-        // Use React-compatible native setter to fill fields and dispatch events
-        await page.evaluate((em, pw) => {
-          function fill(sel, val) {
-            const el = document.querySelector(sel);
-            if (!el) return false;
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            setter.call(el, val);
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-            return true;
-          }
-          fill('input[type="email"], input[name="email"], input[name="login"]', em)
-            || fill('input[type="text"]', em);
-          fill('input[type="password"]', pw);
-        }, email, password).catch(() => {});
+        // Use CDP-level keyboard simulation (isTrusted=true) via elementHandle.type()
+        // This is required because PO checks event.isTrusted on React form events
+        const emailEl = await page.$('input[type="email"]')
+                     || await page.$('input[name="email"]')
+                     || await page.$('input[name="login"]')
+                     || await page.$('input[type="text"]');
+        if (emailEl) {
+          await emailEl.click({ clickCount: 3 }).catch(() => {});
+          await emailEl.type(email, { delay: 80 });
+        }
 
-        await new Promise(r => setTimeout(r, 800));
+        const pwdEl = await page.$('input[type="password"]');
+        if (pwdEl) {
+          await pwdEl.click().catch(() => {});
+          await pwdEl.type(password, { delay: 80 });
+        }
 
-        // Submit via button click OR Enter key
-        const clicked = await page.evaluate(() => {
-          const btn = document.querySelector('button[type="submit"], input[type="submit"], form button, .btn-login');
-          if (btn) { btn.click(); return true; }
-          return false;
-        }).catch(() => false);
-        if (!clicked) {
-          await page.focus('input[type="password"]').catch(() => {});
-          await page.keyboard.press('Enter');
+        await new Promise(r => setTimeout(r, 500));
+
+        // Click submit button, fallback to Enter key
+        const submitBtn = await page.$('button[type="submit"]')
+                       || await page.$('input[type="submit"]')
+                       || await page.$('.btn-login');
+        if (submitBtn) {
+          await submitBtn.click().catch(() => {});
+        } else if (pwdEl) {
+          await pwdEl.press('Enter').catch(() => {});
         }
 
         this._status = 'waiting for post-login navigation';
