@@ -300,9 +300,21 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── GET /health ───────────────────────────────────────────────────────────
+  if (url.pathname === '/health') {
+    json({ status: 'ok', connected: tv.isConnected() });
+    return;
+  }
+
   res.writeHead(404); res.end('Not found');
 
 }).listen(PORT, () => {
   console.log(`Proxy ready on http://localhost:${PORT}`);
   console.log('TV WebSocket connecting…');
+
+  // Keep-alive: ping self every 14 min so Render free tier never sleeps
+  setInterval(() => {
+    fetch('https://euro-trade-proxy.onrender.com/health')
+      .catch(() => {});
+  }, 14 * 60 * 1000);
 });
