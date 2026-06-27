@@ -545,7 +545,7 @@ function _startAllScrapers() {
   }
 
   // Auto-register brokers from environment variables (survives Render restarts)
-  if (process.env.PO_CHART_URL && !brokerConfigs['Pocket Option']) {
+  if (process.env.PO_CHART_URL && !brokerScrapers['Pocket Option']) {
     console.log('[OTC] Auto-registering Pocket Option from PO_CHART_URL env var');
     brokerConfigs['Pocket Option'] = { name: 'Pocket Option', chartUrl: process.env.PO_CHART_URL };
     _startBrokerScraper('Pocket Option', process.env.PO_CHART_URL);
