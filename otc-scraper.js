@@ -120,6 +120,8 @@ class OTCScraper {
     this._destroyed  = false;
     this._restartTimer   = null;
     this._heartbeatTimer = null;
+    this._tickCount  = 0;
+    this._lastTickAt = null;
   }
 
   async start() {
@@ -140,7 +142,7 @@ class OTCScraper {
       }
       console.log(`[OTC:${this._brokerName}] Launching browser for ${this._chartUrl}`);
       this._browser = await puppeteer.launch({
-        headless: 'new',
+        headless: true,
         args: [
           '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
@@ -195,7 +197,8 @@ class OTCScraper {
     const page = this._page;
     try {
       console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
-      await page.goto(this._chartUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      // Use 'load' — trading pages have persistent WS connections so 'networkidle2' never fires
+      await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
 
       let currentUrl = page.url();
       console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
@@ -217,7 +220,6 @@ class OTCScraper {
           await page.focus(emailSel);
           await page.keyboard.type(email, { delay: 60 });
         } catch (_) {
-          // fallback: first text input
           try {
             await page.focus('input[type="text"]');
             await page.keyboard.type(email, { delay: 60 });
@@ -235,7 +237,7 @@ class OTCScraper {
           await page.click('button[type="submit"], input[type="submit"], form button, .btn-login, .auth-button');
         } catch (_) {}
 
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 40000 }).catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'load', timeout: 40000 }).catch(() => {});
         currentUrl = page.url();
         console.log(`[OTC:${this._brokerName}] Post-login URL: ${currentUrl}`);
 
@@ -246,9 +248,9 @@ class OTCScraper {
           return;
         }
 
-        // Navigate to the actual chart URL
+        // Navigate to the actual chart URL after login
         if (currentUrl !== this._chartUrl) {
-          await page.goto(this._chartUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+          await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
         }
       }
 
@@ -278,6 +280,10 @@ class OTCScraper {
 
   _parseMsg(raw) {
     if (!raw || !this._ready) return;
+    // Log first 30 raw messages to diagnose WS format
+    if ((this._tickCount || 0) < 2 && (this._rawLogCount = (this._rawLogCount || 0) + 1) <= 30) {
+      console.log(`[OTC:${this._brokerName}] raw[${this._rawLogCount}]:`, raw.slice(0, 300));
+    }
     let payload = raw;
     const sioMatch = raw.match(/^4[0-9][-]?(\[.*)$/s);
     if (sioMatch) payload = sioMatch[1];
@@ -318,6 +324,8 @@ class OTCScraper {
              : typeof data.t === 'number'         ? data.t
              : Math.floor(Date.now() / 1000);
     const tsSeconds = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
+    this._tickCount++;
+    this._lastTickAt = new Date().toISOString();
     this._onTick(this._brokerName, sym, price, tsSeconds);
   }
 }

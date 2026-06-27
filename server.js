@@ -66,9 +66,20 @@ function ivToSeconds(iv) {
   }
 }
 
-// OANDA:EUR_USD → OANDA:EURUSD  (TV format has no underscore in pair)
+// Strip prefix if present, return bare symbol
+function bareSymbol(sym) {
+  return sym.replace(/^[A-Z]+:/, '').replace(/_/g, '').toUpperCase();
+}
+
+// Find the full prefixed symbol we have data for, fallback to OANDA:bare
 function normalizeSymbol(sym) {
-  return sym.replace(/^(OANDA):(.+)$/, (_, p, pair) => p + ':' + pair.replace('_', ''));
+  const bare = bareSymbol(sym);
+  // Check candle store for any exchange that has this symbol
+  for (const key of Object.keys(tv.candles)) {
+    const keySym = key.replace(/_[^_]+$/, ''); // strip "_1m" etc
+    if (bareSymbol(keySym) === bare) return keySym;
+  }
+  return 'OANDA:' + bare;
 }
 
 function mkId(prefix) {
@@ -99,7 +110,7 @@ const AUTO_SYMBOLS = [
   'BINANCE:TRXUSDT','BINANCE:LTCUSDT','BINANCE:TONUSDT',
   'BINANCE:DASHUSDT','BINANCE:BCHUSDT',
 ];
-const AUTO_IV = '1m';
+const AUTO_IVS = ['1m', '5m', '15m', '1h'];
 
 // ── TradingView WebSocket Client ──────────────────────────────────────────────
 
@@ -155,11 +166,13 @@ class TVClient {
   }
 
   _autoSubscribe() {
-    // Stagger subscriptions 200 ms apart to avoid flooding TradingView
+    // Subscribe all symbols × all intervals on startup so cache is hot
+    // Stagger 300ms per symbol to avoid flooding TradingView
     AUTO_SYMBOLS.forEach((tvSym, i) => {
       setTimeout(() => {
-        if (!this._destroyed) this.subscribe(tvSym, AUTO_IV);
-      }, i * 200);
+        if (this._destroyed) return;
+        AUTO_IVS.forEach(iv => this.subscribe(tvSym, iv));
+      }, i * 300);
     });
   }
 
@@ -533,15 +546,18 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(obj));
   };
 
-  // ── GET /api/tv/candles?symbol=OANDA:EUR_USD&interval=1m ──────────────────
+  // ── GET /api/tv/candles?symbol=EURUSD&interval=1m ────────────────────────
   if (url.pathname === '/api/tv/candles') {
-    const raw    = url.searchParams.get('symbol')   || 'OANDA:EURUSD';
-    const iv     = url.searchParams.get('interval') || '1m';
-    const tvSym  = normalizeSymbol(raw);
+    const raw   = url.searchParams.get('symbol')   || 'EURUSD';
+    const iv    = url.searchParams.get('interval') || '1m';
+    const tvSym = normalizeSymbol(raw);
 
+    // Always ensure subscribed (no-op if already subscribed)
     tv.subscribe(tvSym, iv);
     const candles = tv.getCandles(tvSym, iv);
 
+    // Return whatever we have — even stale cache is better than nothing
+    // chart.js will update via WebSocket tick once live data arrives
     json({
       status:    candles.length ? 'ok' : 'loading',
       connected: tv.isConnected(),
@@ -602,13 +618,21 @@ const server = http.createServer((req, res) => {
     const scraperStatus = {};
     for (const [name, s] of Object.entries(brokerScrapers)) {
       scraperStatus[name] = {
-        ready:     s._ready     || false,
-        destroyed: s._destroyed || false,
-        lastError: s._lastError || null,
+        ready:      s._ready      || false,
+        destroyed:  s._destroyed  || false,
+        lastError:  s._lastError  || null,
+        tickCount:  s._tickCount  || 0,
+        lastTickAt: s._lastTickAt || null,
         pairsCount: otcGetPairs(name).length,
       };
     }
-    json({ status: 'ok', connected: tv.isConnected(), brokers: Object.keys(brokerScrapers), scraperStatus });
+    json({
+      status:    'ok',
+      connected: tv.isConnected(),
+      brokers:   Object.keys(brokerScrapers),
+      poUrlSet:  !!process.env.PO_CHART_URL,
+      scraperStatus,
+    });
     return;
   }
 
