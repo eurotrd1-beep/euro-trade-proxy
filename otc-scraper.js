@@ -188,6 +188,13 @@ class OTCScraper {
         ],
       });
       this._page = await this._browser.newPage();
+      // Block heavy resources to reduce memory on Render 512MB
+      await this._page.setRequestInterception(true);
+      this._page.on('request', req => {
+        const blocked = ['image', 'media', 'font', 'stylesheet', 'other'];
+        if (blocked.includes(req.resourceType())) req.abort();
+        else req.continue();
+      });
       await this._page.setViewport({ width: 1280, height: 720 });
       await this._page.setUserAgent(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
