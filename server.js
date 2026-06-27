@@ -380,10 +380,14 @@ const tv = new TVClient();
 // Save all candles to disk every 60 s, regardless of user activity
 setInterval(() => tv._saveAll(), 60_000);
 
-// ── OTC Candle Store ──────────────────────────────────────────────────────────
+// ── OTC Candle Store (keyed by broker + symbol + interval) ───────────────────
 
-const otcCandles = {};  // key `SYM_iv` → Candle[]
-const otcCurrent = {};  // key `SYM_iv` → building candle
+const otcCandles = {};  // `${brokerKey}_${sym}_${iv}` → Candle[]
+const otcCurrent = {};  // `${brokerKey}_${sym}_${iv}` → building candle
+
+function _bKey(brokerName) {
+  return brokerName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
 
 function _otcLoadAll() {
   try {
@@ -414,26 +418,21 @@ function _otcSave(key) {
   } catch (_) {}
 }
 
-/**
- * Called by OTCScraper on every new tick.
- * Builds 1m / 5m / 15m / 1h candles and broadcasts price to WS clients.
- */
-function otcTick(sym, price, tsSeconds) {
+/** Called by OTCScraper on every tick. Builds 1m/5m/15m/1h candles. */
+function otcTick(brokerName, sym, price, tsSeconds) {
+  const bk = _bKey(brokerName);
   ['1m', '5m', '15m', '1h'].forEach(iv => {
     const sec = ivToSeconds(iv);
-    const key = `${sym}_${iv}`;
+    const key = `${bk}_${sym}_${iv}`;
     const cT  = Math.floor(tsSeconds / sec) * sec;
     const cur = otcCurrent[key];
-
     if (!cur || cur.t !== cT) {
-      // Finalize previous candle
       if (cur) {
         if (!otcCandles[key]) otcCandles[key] = [];
         otcCandles[key].push({ t: cur.t, o: cur.o, h: cur.h, l: cur.l, c: cur.c });
         if (otcCandles[key].length > 200) otcCandles[key].shift();
         _otcSave(key);
       }
-      // Open new candle
       otcCurrent[key] = { t: cT, o: price, h: price, l: price, c: price };
     } else {
       if (price > cur.h) cur.h = price;
@@ -441,32 +440,83 @@ function otcTick(sym, price, tsSeconds) {
       cur.c = price;
     }
   });
-
-  // Broadcast to any subscribed WS client
   broadcastPrice(sym, price);
 }
 
-function otcGetCandles(sym, iv) {
-  const key = `${sym}_${iv}`;
+function otcGetCandles(brokerName, sym, iv) {
+  const key = `${_bKey(brokerName)}_${sym}_${iv}`;
   const hist = otcCandles[key] || [];
   const cur  = otcCurrent[key];
   return cur ? [...hist, { ...cur }] : [...hist];
 }
 
-// Start OTC scraper (no-op if PO_EMAIL / PO_PASSWORD not set)
+/** Returns OTC symbols that have candle data for the given broker. */
+function otcGetPairs(brokerName) {
+  const prefix = _bKey(brokerName) + '_';
+  const syms = new Set();
+  for (const key of Object.keys(otcCandles)) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length);
+    const sym  = rest.replace(/_(1m|5m|15m|1h|1D)$/, '');
+    if (/_OTC$/i.test(sym)) syms.add(sym.toUpperCase());
+  }
+  // Also include symbols from current (in-progress) candles
+  for (const key of Object.keys(otcCurrent)) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length);
+    const sym  = rest.replace(/_(1m|5m|15m|1h|1D)$/, '');
+    if (/_OTC$/i.test(sym)) syms.add(sym.toUpperCase());
+  }
+  return [...syms].sort();
+}
+
+// ── Multi-broker scraper management ──────────────────────────────────────────
+
+const brokerScrapers = {};  // brokerName → OTCScraper instance
+const brokerConfigs  = {};  // brokerName → { name, chartUrl }
+const BROKERS_FILE   = path.join(DATA_DIR, 'brokers.json');
+
+function _saveBrokerConfigs() {
+  try {
+    fs.writeFileSync(BROKERS_FILE, JSON.stringify(Object.values(brokerConfigs), null, 2));
+  } catch (_) {}
+}
+
+function _startBrokerScraper(name, chartUrl) {
+  if (!chartUrl) return;
+  if (brokerScrapers[name]) {
+    console.log(`[OTC] Scraper for "${name}" already running`);
+    return;
+  }
+  try {
+    const { OTCScraper } = require('./otc-scraper');
+    const scraper = new OTCScraper({ chartUrl, brokerName: name, onTick: otcTick });
+    brokerScrapers[name] = scraper;
+    brokerConfigs[name]  = { name, chartUrl };
+    scraper.start();
+    console.log(`[OTC] Started scraper for broker: ${name}`);
+  } catch (err) {
+    console.warn(`[OTC] Failed to start scraper for "${name}":`, err.message);
+  }
+}
+
+// Load persisted broker configs and start scrapers
 try {
-  const { OTCScraper } = require('./otc-scraper');
-  const otcScraper = new OTCScraper({ onTick: otcTick });
-  otcScraper.start();
+  if (fs.existsSync(BROKERS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(BROKERS_FILE, 'utf8'));
+    if (Array.isArray(saved)) {
+      saved.forEach(b => { if (b.name && b.chartUrl) _startBrokerScraper(b.name, b.chartUrl); });
+    }
+  }
 } catch (err) {
-  console.warn('[OTC] scraper module error:', err.message);
+  console.warn('[OTC] Error loading brokers.json:', err.message);
 }
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
@@ -501,18 +551,48 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /api/po/candles?symbol=EURUSD_OTC&interval=1m ────────────────────
-  if (url.pathname === '/api/po/candles') {
+  // ── GET /api/otc/candles?broker=X&symbol=EURUSD_OTC&interval=1m ──────────
+  if (url.pathname === '/api/otc/candles' || url.pathname === '/api/po/candles') {
+    const broker  = url.searchParams.get('broker')   || 'Pocket Option';
     const sym     = url.searchParams.get('symbol')   || 'EURUSD_OTC';
     const iv      = url.searchParams.get('interval') || '1m';
-    const candles = otcGetCandles(sym, iv);
-    json({ status: candles.length ? 'ok' : 'loading', candles });
+    const candles = otcGetCandles(broker, sym, iv);
+    json({ status: candles.length ? 'ok' : 'loading', broker, candles });
+    return;
+  }
+
+  // ── GET /api/otc/pairs?broker=X ────────────────────────────────────────
+  if (url.pathname === '/api/otc/pairs') {
+    const broker = url.searchParams.get('broker') || 'Pocket Option';
+    const pairs  = otcGetPairs(broker);
+    json({ broker, pairs });
+    return;
+  }
+
+  // ── POST /api/admin/sync-broker  body: { name, chartUrl } ──────────────
+  if (url.pathname === '/api/admin/sync-broker' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { name, chartUrl } = JSON.parse(body);
+        if (!name || !chartUrl) { res.writeHead(400); res.end('Missing name or chartUrl'); return; }
+        brokerConfigs[name] = { name, chartUrl };
+        _saveBrokerConfigs();
+        if (!brokerScrapers[name]) {
+          _startBrokerScraper(name, chartUrl);
+        }
+        json({ ok: true, message: `Broker "${name}" synced` });
+      } catch (e) {
+        res.writeHead(400); res.end('Invalid JSON');
+      }
+    });
     return;
   }
 
   // ── GET /health ───────────────────────────────────────────────────────────
   if (url.pathname === '/health') {
-    json({ status: 'ok', connected: tv.isConnected() });
+    json({ status: 'ok', connected: tv.isConnected(), brokers: Object.keys(brokerScrapers) });
     return;
   }
 

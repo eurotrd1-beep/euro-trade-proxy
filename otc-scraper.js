@@ -1,61 +1,85 @@
 'use strict';
 
 /**
- * PocketOption OTC Scraper
- * Logs into PocketOption with Puppeteer, spies on all WebSocket frames,
- * and extracts live tick prices for OTC currency pairs.
+ * Generic OTC Scraper
+ * Opens any trading platform's chart URL, logs in if redirected, and spies
+ * on all WebSocket messages to extract live OTC tick prices.
  *
  * Required env vars:
- *   PO_EMAIL    – PocketOption account email
- *   PO_PASSWORD – PocketOption account password
+ *   PO_EMAIL    – shared account email
+ *   PO_PASSWORD – shared account password
  */
 
-/* Mapping: PocketOption asset names  →  our internal OTC symbol */
 const SYM_MAP = {
-  // Common variations PocketOption might use
-  'EURUSD_OTC':  'EURUSD_OTC',
-  'EURUSD-OTC':  'EURUSD_OTC',
-  'EURUSDOTC':   'EURUSD_OTC',
-  '#EURUSD_OTC': 'EURUSD_OTC',
-  'EUR/USD OTC': 'EURUSD_OTC',
-  'EURUSD':      null, // non-OTC, skip
+  // PocketOption / Quotex / ExpertOption OTC symbol variations
+  'EURUSD_OTC':   'EURUSD_OTC',
+  'EURUSD-OTC':   'EURUSD_OTC',
+  'EURUSDOTC':    'EURUSD_OTC',
+  '#EURUSD_OTC':  'EURUSD_OTC',
+  'EUR/USD OTC':  'EURUSD_OTC',
 
-  'GBPUSD_OTC':  'GBPUSD_OTC',
-  'GBPUSD-OTC':  'GBPUSD_OTC',
-  'GBPUSDOTC':   'GBPUSD_OTC',
-  '#GBPUSD_OTC': 'GBPUSD_OTC',
-  'GBP/USD OTC': 'GBPUSD_OTC',
+  'GBPUSD_OTC':   'GBPUSD_OTC',
+  'GBPUSD-OTC':   'GBPUSD_OTC',
+  'GBPUSDOTC':    'GBPUSD_OTC',
+  '#GBPUSD_OTC':  'GBPUSD_OTC',
+  'GBP/USD OTC':  'GBPUSD_OTC',
 
-  'XAUUSD_OTC':  'XAUUSD_OTC',
-  'XAUUSD-OTC':  'XAUUSD_OTC',
-  'XAUUSDOTC':   'XAUUSD_OTC',
-  '#XAUUSD_OTC': 'XAUUSD_OTC',
-  'XAU/USD OTC': 'XAUUSD_OTC',
+  'XAUUSD_OTC':   'XAUUSD_OTC',
+  'XAUUSD-OTC':   'XAUUSD_OTC',
+  'XAUUSDOTC':    'XAUUSD_OTC',
+  '#XAUUSD_OTC':  'XAUUSD_OTC',
+  'XAU/USD OTC':  'XAUUSD_OTC',
+
+  'USDJPY_OTC':   'USDJPY_OTC',
+  'USDJPY-OTC':   'USDJPY_OTC',
+  'USDJPYOTC':    'USDJPY_OTC',
+  '#USDJPY_OTC':  'USDJPY_OTC',
+  'USD/JPY OTC':  'USDJPY_OTC',
+
+  'USDCHF_OTC':   'USDCHF_OTC',
+  'USDCHF-OTC':   'USDCHF_OTC',
+  'USDCHFOTC':    'USDCHF_OTC',
+  '#USDCHF_OTC':  'USDCHF_OTC',
+  'USD/CHF OTC':  'USDCHF_OTC',
+
+  'AUDUSD_OTC':   'AUDUSD_OTC',
+  'AUDUSD-OTC':   'AUDUSD_OTC',
+  'AUDUSDOTC':    'AUDUSD_OTC',
+  '#AUDUSD_OTC':  'AUDUSD_OTC',
+  'AUD/USD OTC':  'AUDUSD_OTC',
+
+  'EURGBP_OTC':   'EURGBP_OTC',
+  'EURGBP-OTC':   'EURGBP_OTC',
+  'EURGBPOTC':    'EURGBP_OTC',
+  '#EURGBP_OTC':  'EURGBP_OTC',
+  'EUR/GBP OTC':  'EURGBP_OTC',
+
+  // Non-OTC → skip
+  'EURUSD': null, 'GBPUSD': null, 'XAUUSD': null,
 };
 
 function normalizeSym(raw) {
   if (!raw) return null;
-  // Try exact match first
   if (SYM_MAP[raw] !== undefined) return SYM_MAP[raw];
-  // Try uppercase normalized
   const up = raw.toUpperCase().replace(/[#\s/]/g, '');
   for (const [k, v] of Object.entries(SYM_MAP)) {
     if (k.toUpperCase().replace(/[#\s/]/g, '') === up) return v;
   }
+  // Auto-detect: anything ending with OTC and >= 6 chars before OTC
+  if (/_OTC$/i.test(raw)) {
+    return raw.toUpperCase().replace(/[-\s/]/g, '_');
+  }
   return null;
 }
 
-/* ── WebSocket spy script (runs inside the page context) ─────────────── */
+/* ── WebSocket spy (injected before any page code runs) ───────────────────── */
 const WS_SPY_SCRIPT = `
 (function() {
   if (window.__otcSpyInstalled) return;
   window.__otcSpyInstalled = true;
-
   var _OrigWS = window.WebSocket;
-
   function SpiedWS(url, protocols) {
     var ws = protocols ? new _OrigWS(url, protocols) : new _OrigWS(url);
-
     ws.addEventListener('message', function(evt) {
       try {
         if (typeof evt.data === 'string') {
@@ -67,48 +91,45 @@ const WS_SPY_SCRIPT = `
         }
       } catch(_) {}
     });
-
     return ws;
   }
-
   SpiedWS.prototype  = _OrigWS.prototype;
   SpiedWS.CONNECTING = _OrigWS.CONNECTING;
   SpiedWS.OPEN       = _OrigWS.OPEN;
   SpiedWS.CLOSING    = _OrigWS.CLOSING;
   SpiedWS.CLOSED     = _OrigWS.CLOSED;
-
   window.WebSocket = SpiedWS;
 })();
 `;
 
-/* ── OTCScraper class ─────────────────────────────────────────────────── */
+/* ── OTCScraper ───────────────────────────────────────────────────────────── */
 class OTCScraper {
   /**
    * @param {object} opts
-   * @param {function(sym:string, price:number, ts:number):void} opts.onTick
+   * @param {string}   opts.chartUrl   Trading page URL (admin-supplied per broker)
+   * @param {string}   opts.brokerName Human-readable broker name
+   * @param {function} opts.onTick     Called with (brokerName, sym, price, tsSeconds)
    */
-  constructor({ onTick }) {
-    this._onTick    = onTick;
-    this._browser   = null;
-    this._page      = null;
-    this._ready     = false;
-    this._destroyed = false;
-    this._restartTimer = null;
+  constructor({ chartUrl, brokerName, onTick }) {
+    this._chartUrl   = chartUrl;
+    this._brokerName = brokerName;
+    this._onTick     = onTick;
+    this._browser    = null;
+    this._page       = null;
+    this._ready      = false;
+    this._destroyed  = false;
+    this._restartTimer   = null;
+    this._heartbeatTimer = null;
   }
-
-  /* ── Public ──────────────────────────────────────────────────────────── */
 
   async start() {
     if (this._destroyed) return;
-
     const email    = process.env.PO_EMAIL;
     const password = process.env.PO_PASSWORD;
-
     if (!email || !password) {
-      console.warn('[OTC] PO_EMAIL / PO_PASSWORD not set — OTC scraper disabled.');
+      console.warn(`[OTC:${this._brokerName}] PO_EMAIL / PO_PASSWORD not set — scraper disabled.`);
       return;
     }
-
     try {
       let puppeteer;
       try { puppeteer = require('puppeteer'); }
@@ -116,55 +137,34 @@ class OTCScraper {
         console.error('[OTC] puppeteer not installed — run: npm install puppeteer');
         return;
       }
-
-      console.log('[OTC] Launching headless browser...');
-
+      console.log(`[OTC:${this._brokerName}] Launching browser for ${this._chartUrl}`);
       this._browser = await puppeteer.launch({
         headless: 'new',
         args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu',
-          '--disable-extensions',
-          '--disable-background-networking',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-breakpad',
-          '--disable-sync',
-          '--metrics-recording-only',
+          '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
+          '--disable-gpu', '--disable-extensions', '--disable-background-networking',
+          '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
+          '--disable-breakpad', '--disable-sync', '--metrics-recording-only',
         ],
       });
-
       this._page = await this._browser.newPage();
       await this._page.setViewport({ width: 1280, height: 720 });
       await this._page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-        'Chrome/124.0.0.0 Safari/537.36'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       );
-
-      // Inject WS spy BEFORE any page script runs
       await this._page.evaluateOnNewDocument(WS_SPY_SCRIPT);
-
-      // Expose Node.js callback to the page
       await this._page.exposeFunction('__otcSpy', (data) => this._parseMsg(data));
-
-      // Handle page crashes / unexpected closes
       this._browser.on('disconnected', () => {
         if (!this._destroyed) {
-          console.warn('[OTC] Browser disconnected — restarting in 30 s...');
+          console.warn(`[OTC:${this._brokerName}] Browser disconnected — restarting in 30s`);
           this._scheduleRestart(30000);
         }
       });
-
-      await this._login(email, password);
-
+      await this._navigateToTrading(email, password);
     } catch (err) {
-      console.error('[OTC] Start error:', err.message);
+      console.error(`[OTC:${this._brokerName}] Start error:`, err.message);
       if (!this._destroyed) this._scheduleRestart(30000);
     }
   }
@@ -176,7 +176,7 @@ class OTCScraper {
     if (this._browser) this._browser.close().catch(() => {});
   }
 
-  /* ── Private ─────────────────────────────────────────────────────────── */
+  /* ── Private ─────────────────────────────────────────────────────────────── */
 
   _scheduleRestart(ms) {
     clearTimeout(this._restartTimer);
@@ -189,141 +189,133 @@ class OTCScraper {
     }, ms);
   }
 
-  async _login(email, password) {
+  async _navigateToTrading(email, password) {
     const page = this._page;
-
     try {
-      console.log('[OTC] Navigating to PocketOption login...');
-      await page.goto('https://pocketoption.com/en/login/', {
-        waitUntil: 'networkidle2',
-        timeout: 60000,
-      });
+      console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
+      await page.goto(this._chartUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-      // Wait for email field
-      await page.waitForSelector('input[name="email"], input[type="email"]', { timeout: 20000 });
-      await page.focus('input[name="email"], input[type="email"]');
-      await page.keyboard.type(email, { delay: 60 });
+      let currentUrl = page.url();
+      console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
 
-      await page.focus('input[name="password"], input[type="password"]');
-      await page.keyboard.type(password, { delay: 60 });
+      // If redirected to a login/auth page, auto-login
+      const isLoginPage = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
+      if (isLoginPage) {
+        console.log(`[OTC:${this._brokerName}] Login page detected — filling credentials`);
 
-      // Click submit
-      await page.click(
-        'button[type="submit"], input[type="submit"], ' +
-        '.btn-login, .auth-button, form button'
-      );
+        // Wait for any email/username field
+        await page.waitForSelector(
+          'input[type="email"], input[name="email"], input[name="username"], input[type="text"]',
+          { timeout: 20000 }
+        ).catch(() => {});
 
-      console.log('[OTC] Waiting for login redirect...');
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 40000 });
+        // Fill email
+        const emailSel = 'input[type="email"], input[name="email"], input[name="username"]';
+        try {
+          await page.focus(emailSel);
+          await page.keyboard.type(email, { delay: 60 });
+        } catch (_) {
+          // fallback: first text input
+          try {
+            await page.focus('input[type="text"]');
+            await page.keyboard.type(email, { delay: 60 });
+          } catch (_2) {}
+        }
 
-      const afterUrl = page.url();
-      console.log('[OTC] Post-login URL:', afterUrl);
+        // Fill password
+        try {
+          await page.focus('input[type="password"]');
+          await page.keyboard.type(password, { delay: 60 });
+        } catch (_) {}
 
-      if (afterUrl.includes('/login')) {
-        console.error('[OTC] Still on login page — check credentials or captcha.');
-        this._scheduleRestart(120000); // retry after 2 min
-        return;
+        // Submit
+        try {
+          await page.click('button[type="submit"], input[type="submit"], form button, .btn-login, .auth-button');
+        } catch (_) {}
+
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 40000 }).catch(() => {});
+        currentUrl = page.url();
+        console.log(`[OTC:${this._brokerName}] Post-login URL: ${currentUrl}`);
+
+        const stillOnLogin = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
+        if (stillOnLogin) {
+          console.error(`[OTC:${this._brokerName}] Login failed — retrying in 2 min`);
+          this._scheduleRestart(120000);
+          return;
+        }
+
+        // Navigate to the actual chart URL
+        if (currentUrl !== this._chartUrl) {
+          await page.goto(this._chartUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        }
       }
 
-      // Navigate to the trading interface
-      await page.goto('https://pocketoption.com/en/cabinet/demo-quick-high-low/', {
-        waitUntil: 'networkidle2',
-        timeout: 60000,
-      });
-
-      console.log('[OTC] Trading page loaded — price stream active.');
+      console.log(`[OTC:${this._brokerName}] Trading page ready — WS spy active`);
       this._ready = true;
 
-      // Keep browser session alive: ping page every 5 min
+      // Heartbeat: ping page every 5 min
       this._heartbeatTimer = setInterval(async () => {
         if (this._destroyed || !this._page) return;
         try {
           const alive = await this._page.evaluate(() => !!document.body);
           if (!alive) throw new Error('page dead');
-          console.log('[OTC] heartbeat ok');
+          console.log(`[OTC:${this._brokerName}] heartbeat ok`);
         } catch (e) {
-          console.warn('[OTC] heartbeat failed — restarting:', e.message);
+          console.warn(`[OTC:${this._brokerName}] heartbeat failed — restarting:`, e.message);
           clearInterval(this._heartbeatTimer);
           this._scheduleRestart(5000);
         }
       }, 5 * 60 * 1000);
 
     } catch (err) {
-      console.error('[OTC] Login/navigation error:', err.message);
+      console.error(`[OTC:${this._brokerName}] Navigation error:`, err.message);
       if (!this._destroyed) this._scheduleRestart(60000);
     }
   }
 
   _parseMsg(raw) {
     if (!raw || !this._ready) return;
-
-    // Strip socket.io envelope: "42[...]"  "451-[...]"  etc.
     let payload = raw;
     const sioMatch = raw.match(/^4[0-9][-]?(\[.*)$/s);
     if (sioMatch) payload = sioMatch[1];
-
     let parsed;
-    try { parsed = JSON.parse(payload); }
-    catch (_) { return; }
+    try { parsed = JSON.parse(payload); } catch (_) { return; }
 
-    // ── Format 1: ["updateStream", {asset, price, time}] ──────────────
     if (Array.isArray(parsed)) {
       const [action, data] = parsed;
       if (typeof action === 'string' && data && typeof data === 'object') {
-        const actions = ['updateStream', 'price', 'tick', 'quotation', 'stream', 'data'];
-        if (actions.includes(action)) {
-          this._tryEmit(data);
-          return;
-        }
+        const actions = ['updateStream', 'price', 'tick', 'quotation', 'stream', 'data', 'asset', 'candle'];
+        if (actions.includes(action)) { this._tryEmit(data); return; }
       }
-      // Some brokers stream arrays of ticks
-      if (Array.isArray(parsed[0])) {
-        for (const item of parsed) this._tryEmit(item);
-        return;
-      }
+      if (Array.isArray(parsed[0])) { for (const item of parsed) this._tryEmit(item); return; }
     }
 
-    // ── Format 2: {action:"updateStream", message:{...}} ──────────────
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      if (parsed.message) {
-        this._tryEmit(parsed.message);
-        return;
-      }
-      // Direct object with asset + price
+      if (parsed.message) { this._tryEmit(parsed.message); return; }
       this._tryEmit(parsed);
     }
   }
 
   _tryEmit(data) {
     if (!data || typeof data !== 'object') return;
-
-    // Asset name — try multiple key names
     const asset =
-      data.asset  || data.symbol  || data.pair  ||
-      data.name   || data.code    || data.ticker ||
-      data.s      || data.a;
-
-    // Price — try multiple key names
+      data.asset  || data.symbol || data.pair  || data.name   ||
+      data.code   || data.ticker || data.s      || data.a      ||
+      data.active || data.id;
     const rawPrice =
-      data.price  || data.close  || data.value  ||
-      data.rate   || data.last   || data.lp     ||
-      data.c      || data.p      || data.v;
-
+      data.price  || data.close  || data.value  || data.rate   ||
+      data.last   || data.lp     || data.c       || data.p      ||
+      data.v      || data.current_price;
     if (!asset || rawPrice == null) return;
-
     const sym   = normalizeSym(String(asset));
     const price = parseFloat(rawPrice);
-
     if (!sym || isNaN(price) || price <= 0) return;
-
     const ts = typeof data.time === 'number'      ? data.time
              : typeof data.timestamp === 'number' ? data.timestamp
              : typeof data.t === 'number'         ? data.t
              : Math.floor(Date.now() / 1000);
-
     const tsSeconds = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
-
-    this._onTick(sym, price, tsSeconds);
+    this._onTick(this._brokerName, sym, price, tsSeconds);
   }
 }
 
