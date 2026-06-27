@@ -1,7 +1,18 @@
 'use strict';
 
 const http = require('http');
+const fs   = require('fs');
+const path = require('path');
 const { WebSocket } = require('ws');
+
+// ── Candle persistence ────────────────────────────────────────────────────────
+
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+
+function keyToFile(key) {
+  return path.join(DATA_DIR, key.replace(/[:/]/g, '_') + '.json');
+}
 
 const PORT   = process.env.PORT || 3000;
 const TV_URL = 'wss://data.tradingview.com/socket.io/websocket?from=chart%2F&date=2024_01_01-00_01&type=chart';
@@ -54,7 +65,41 @@ class TVClient {
     this.symQS       = {};  // tvSym → qsId  (one quote session per symbol)
     this.keyCS       = {};  // `${tvSym}_${iv}` → csId
 
+    this._saveTimers = {};  // key → setTimeout handle
+
+    this._loadAll();
     this._connect();
+  }
+
+  // ── Persistence ──────────────────────────────────────────────────────────────
+
+  _loadAll() {
+    try {
+      const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const raw  = fs.readFileSync(path.join(DATA_DIR, file), 'utf8');
+          const data = JSON.parse(raw);
+          if (data.key && Array.isArray(data.candles) && data.candles.length) {
+            this.candles[data.key] = data.candles;
+            console.log(`[store] loaded ${data.candles.length} candles for ${data.key}`);
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  _saveCandles(key) {
+    try {
+      const candles = this.candles[key];
+      if (!candles || !candles.length) return;
+      fs.writeFileSync(keyToFile(key), JSON.stringify({ key, candles }));
+    } catch (_) {}
+  }
+
+  _schedSave(key) {
+    if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
+    this._saveTimers[key] = setTimeout(() => this._saveCandles(key), 30_000);
   }
 
   // ── Connection ──────────────────────────────────────────────────────────────
@@ -177,14 +222,17 @@ class TVClient {
         t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4],
       }));
       console.log(`[TV] ${key}: loaded ${this.candles[key].length} candles`);
+      this._saveCandles(key);          // save immediately after full load
     } else {
       if (!this.candles[key]) return;
+      let newCandle = false;
       for (const b of sds.s) {
         const bar = { t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] };
         const idx = b.i;
-        if (idx >= this.candles[key].length) this.candles[key].push(bar);
+        if (idx >= this.candles[key].length) { this.candles[key].push(bar); newCandle = true; }
         else this.candles[key][idx] = bar;
       }
+      if (newCandle) this._schedSave(key); // debounced save when new candle opens
     }
   }
 
