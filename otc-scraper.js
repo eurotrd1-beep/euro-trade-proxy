@@ -244,7 +244,12 @@ class OTCScraper {
         console.log(`[OTC:${this._brokerName}] Redirect detected (frame detached) — continuing`);
       }
 
-      let currentUrl = page.url();
+      // After a frame-detach redirect, page.url() may throw briefly — retry after short wait
+      let currentUrl = '';
+      try { currentUrl = page.url(); } catch (_) {
+        await new Promise(r => setTimeout(r, 2000));
+        try { currentUrl = page.url(); } catch (_2) { currentUrl = ''; }
+      }
       this._status = 'landed: ' + currentUrl;
       console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
 
