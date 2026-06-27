@@ -209,12 +209,20 @@ class OTCScraper {
           this._scheduleRestart(30000);
         }
       });
-      // Load session cookies if saved
+      // Load session cookies: env var (persistent) → file (runtime-only)
       let sessionCookies = null;
       try {
-        const fs2 = require('fs');
-        const cookiePath = require('path').join(__dirname, 'po_session.json');
-        if (fs2.existsSync(cookiePath)) sessionCookies = JSON.parse(fs2.readFileSync(cookiePath, 'utf8'));
+        if (process.env.PO_COOKIES) {
+          sessionCookies = JSON.parse(Buffer.from(process.env.PO_COOKIES, 'base64').toString());
+          console.log(`[OTC:${this._brokerName}] Loaded ${sessionCookies.length} cookies from PO_COOKIES env`);
+        } else {
+          const fs2 = require('fs');
+          const cookiePath = require('path').join(__dirname, 'po_session.json');
+          if (fs2.existsSync(cookiePath)) {
+            sessionCookies = JSON.parse(fs2.readFileSync(cookiePath, 'utf8'));
+            console.log(`[OTC:${this._brokerName}] Loaded ${sessionCookies.length} cookies from po_session.json`);
+          }
+        }
       } catch (_) {}
       await this._navigateToTrading(email, password, sessionCookies);
     } catch (err) {
