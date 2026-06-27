@@ -48,6 +48,32 @@ function mkId(prefix) {
   return prefix + Math.random().toString(36).slice(2, 14);
 }
 
+// ── Symbols to track 24/7 (subscribed on startup) ────────────────────────────
+
+const AUTO_SYMBOLS = [
+  // Forex majors + minors
+  'OANDA:EURUSD','OANDA:GBPUSD','OANDA:USDJPY','OANDA:AUDUSD',
+  'OANDA:USDCAD','OANDA:USDCHF','OANDA:EURGBP','OANDA:EURJPY',
+  'OANDA:GBPJPY','OANDA:NZDUSD','OANDA:AUDCAD','OANDA:AUDCHF',
+  'OANDA:AUDJPY','OANDA:AUDNZD','OANDA:CADJPY','OANDA:CADCHF',
+  'OANDA:CHFJPY','OANDA:EURCAD','OANDA:EURCHF','OANDA:EURAUD',
+  'OANDA:EURNZD','OANDA:EURTRY','OANDA:GBPAUD','OANDA:GBPCAD',
+  'OANDA:GBPCHF','OANDA:NZDJPY','OANDA:USDMXN','OANDA:USDINR',
+  'OANDA:USDSGD','OANDA:USDCNH','OANDA:USDRUB','OANDA:EURHUF',
+  'OANDA:EURRUB','OANDA:CHFNOK','OANDA:USDPHP','OANDA:USDBRL',
+  'OANDA:USDZAR',
+  // Metals & Commodities
+  'OANDA:XAUUSD','OANDA:XAGUSD','OANDA:XPDUSD','OANDA:XPTUSD',
+  'OANDA:BRENTUSD','OANDA:WTICOUSD','OANDA:NATGASUSD',
+  // Crypto
+  'COINBASE:BTCUSD','BINANCE:ETHUSDT','BINANCE:ADAUSDT',
+  'BINANCE:SOLUSDT','BINANCE:BNBUSDT','BINANCE:DOGEUSDT',
+  'BINANCE:LINKUSDT','BINANCE:DOTUSDT','BINANCE:AVAXUSDT',
+  'BINANCE:TRXUSDT','BINANCE:LTCUSDT','BINANCE:TONUSDT',
+  'BINANCE:DASHUSDT','BINANCE:BCHUSDT',
+];
+const AUTO_IV = '1m';
+
 // ── TradingView WebSocket Client ──────────────────────────────────────────────
 
 class TVClient {
@@ -97,9 +123,17 @@ class TVClient {
     } catch (_) {}
   }
 
-  _schedSave(key) {
-    if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
-    this._saveTimers[key] = setTimeout(() => this._saveCandles(key), 30_000);
+  _saveAll() {
+    Object.keys(this.candles).forEach(key => this._saveCandles(key));
+  }
+
+  _autoSubscribe() {
+    // Stagger subscriptions 200 ms apart to avoid flooding TradingView
+    AUTO_SYMBOLS.forEach((tvSym, i) => {
+      setTimeout(() => {
+        if (!this._destroyed) this.subscribe(tvSym, AUTO_IV);
+      }, i * 200);
+    });
   }
 
   // ── Connection ──────────────────────────────────────────────────────────────
@@ -119,7 +153,7 @@ class TVClient {
       console.log('[TV] Connected');
       this.ready = true;
       this._send({ m: 'set_auth_token', p: ['unauthorized_user_token'] });
-      // Re-subscribe everything after reconnect
+      // Re-subscribe existing sessions after reconnect
       Object.entries(this.keyCS).forEach(([key, cs]) => {
         const { tvSym, iv } = this.cSess[cs];
         this._doSubscribeChart(tvSym, iv, cs);
@@ -127,6 +161,8 @@ class TVClient {
       Object.entries(this.symQS).forEach(([tvSym, qs]) => {
         this._doSubscribeQuote(tvSym, qs);
       });
+      // Auto-subscribe all tracked symbols on startup / reconnect
+      this._autoSubscribe();
     });
 
     this.ws.on('message', data => this._onMsg(data.toString()));
@@ -308,6 +344,9 @@ class TVClient {
 }
 
 const tv = new TVClient();
+
+// Save all candles to disk every 60 s, regardless of user activity
+setInterval(() => tv._saveAll(), 60_000);
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
