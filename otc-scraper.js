@@ -273,8 +273,9 @@ class OTCScraper {
 
         const stillOnLogin = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
         if (stillOnLogin) {
-          console.error(`[OTC:${this._brokerName}] Login failed — retrying in 2 min`);
-          this._scheduleRestart(120000);
+          this._lastError = `Login failed — still on: ${currentUrl}`;
+          console.error(`[OTC:${this._brokerName}] ${this._lastError} — retrying in 60s`);
+          this._scheduleRestart(60000);
           return;
         }
 
