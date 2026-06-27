@@ -281,12 +281,14 @@ class TVClient {
     const sds = data && data['sds_1'];
     if (!sds || !sds.s) return;
 
+    const MAX = 200;
+
     if (full) {
-      this.candles[key] = sds.s.map(b => ({
-        t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4],
-      }));
+      const all = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
+      // Keep only the last MAX candles
+      this.candles[key] = all.length > MAX ? all.slice(all.length - MAX) : all;
       console.log(`[TV] ${key}: loaded ${this.candles[key].length} candles`);
-      this._saveCandles(key);          // save immediately after full load
+      this._saveCandles(key);
     } else {
       if (!this.candles[key]) return;
       let newCandle = false;
@@ -296,7 +298,9 @@ class TVClient {
         if (idx >= this.candles[key].length) { this.candles[key].push(bar); newCandle = true; }
         else this.candles[key][idx] = bar;
       }
-      if (newCandle) this._schedSave(key); // debounced save when new candle opens
+      // Sliding window: trim oldest when over limit
+      if (this.candles[key].length > MAX) this.candles[key].splice(0, this.candles[key].length - MAX);
+      if (newCandle) this._schedSave(key);
     }
   }
 
@@ -329,7 +333,7 @@ class TVClient {
     const tvIv = ivToTV(iv);
     this._send({ m: 'chart_create_session', p: [cs, ''] });
     this._send({ m: 'resolve_symbol',       p: [cs, 'sds_sym_1', `={"symbol":"${tvSym}","adjustment":"splits"}`] });
-    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 300] });
+    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 200] });
   }
 
   subscribe(tvSym, iv) {
@@ -426,7 +430,7 @@ function otcTick(sym, price, tsSeconds) {
       if (cur) {
         if (!otcCandles[key]) otcCandles[key] = [];
         otcCandles[key].push({ t: cur.t, o: cur.o, h: cur.h, l: cur.l, c: cur.c });
-        if (otcCandles[key].length > 500) otcCandles[key].shift();
+        if (otcCandles[key].length > 200) otcCandles[key].shift();
         _otcSave(key);
       }
       // Open new candle
