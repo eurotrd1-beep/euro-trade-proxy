@@ -3,7 +3,34 @@
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
-const { WebSocket } = require('ws');
+const { WebSocket, WebSocketServer } = require('ws');
+
+// ── Browser WebSocket clients ─────────────────────────────────────────────────
+const wss       = new WebSocketServer({ noServer: true });
+const clientMap = new Map(); // ws → Set<tvSym>
+
+wss.on('connection', (ws) => {
+  clientMap.set(ws, new Set());
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      const subs = clientMap.get(ws);
+      if (!subs) return;
+      if (msg.sub)   subs.add(msg.sub);
+      if (msg.unsub) subs.delete(msg.unsub);
+    } catch (_) {}
+  });
+  ws.on('close', () => clientMap.delete(ws));
+  ws.on('error', () => clientMap.delete(ws));
+});
+
+function broadcastPrice(tvSym, price) {
+  for (const [ws, subs] of clientMap) {
+    if (subs.has(tvSym) && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify({ sym: tvSym, price })); } catch (_) {}
+    }
+  }
+}
 
 // ── Candle persistence ────────────────────────────────────────────────────────
 
@@ -218,6 +245,7 @@ class TVClient {
         const lp    = data.v && data.v.lp;
         if (tvSym && lp != null) {
           this.prices[tvSym] = lp;
+          broadcastPrice(tvSym, lp);
           // Update last candle across all intervals
           Object.keys(this.candles).forEach(key => {
             if (key.startsWith(tvSym + '_')) {
@@ -350,7 +378,7 @@ setInterval(() => tv._saveAll(), 60_000);
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -395,7 +423,17 @@ http.createServer((req, res) => {
 
   res.writeHead(404); res.end('Not found');
 
-}).listen(PORT, () => {
+});
+
+server.on('upgrade', (req, socket, head) => {
+  if (new URL(req.url, 'http://x').pathname === '/ws') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(PORT, () => {
   console.log(`Proxy ready on http://localhost:${PORT}`);
   console.log('TV WebSocket connecting…');
 
