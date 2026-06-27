@@ -513,23 +513,43 @@ function _startBrokerScraper(name, chartUrl) {
   }
 }
 
-// Load persisted broker configs and start scrapers
-try {
-  if (fs.existsSync(BROKERS_FILE)) {
-    const saved = JSON.parse(fs.readFileSync(BROKERS_FILE, 'utf8'));
-    if (Array.isArray(saved)) {
-      saved.forEach(b => { if (b.name && b.chartUrl) _startBrokerScraper(b.name, b.chartUrl); });
-    }
-  }
-} catch (err) {
-  console.warn('[OTC] Error loading brokers.json:', err.message);
+// ── Chrome install + scraper startup (runs after server is listening) ────────
+
+let _chromeReady = false;
+
+async function _ensureChrome() {
+  return new Promise(resolve => {
+    const { exec } = require('child_process');
+    console.log('[OTC] Installing Chrome via puppeteer...');
+    exec('npx puppeteer browsers install chrome', { timeout: 180000 }, (err, stdout, stderr) => {
+      if (err) console.warn('[OTC] Chrome install warning:', err.message);
+      else console.log('[OTC] Chrome installed successfully');
+      if (stdout) console.log('[OTC] Chrome install stdout:', stdout.slice(-300));
+      _chromeReady = true;
+      resolve();
+    });
+  });
 }
 
-// Auto-register brokers from environment variables (survives Render restarts)
-if (process.env.PO_CHART_URL && !brokerConfigs['Pocket Option']) {
-  console.log('[OTC] Auto-registering Pocket Option from PO_CHART_URL env var');
-  brokerConfigs['Pocket Option'] = { name: 'Pocket Option', chartUrl: process.env.PO_CHART_URL };
-  _startBrokerScraper('Pocket Option', process.env.PO_CHART_URL);
+function _startAllScrapers() {
+  // Load persisted broker configs and start scrapers
+  try {
+    if (fs.existsSync(BROKERS_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(BROKERS_FILE, 'utf8'));
+      if (Array.isArray(saved)) {
+        saved.forEach(b => { if (b.name && b.chartUrl) _startBrokerScraper(b.name, b.chartUrl); });
+      }
+    }
+  } catch (err) {
+    console.warn('[OTC] Error loading brokers.json:', err.message);
+  }
+
+  // Auto-register brokers from environment variables (survives Render restarts)
+  if (process.env.PO_CHART_URL && !brokerConfigs['Pocket Option']) {
+    console.log('[OTC] Auto-registering Pocket Option from PO_CHART_URL env var');
+    brokerConfigs['Pocket Option'] = { name: 'Pocket Option', chartUrl: process.env.PO_CHART_URL };
+    _startBrokerScraper('Pocket Option', process.env.PO_CHART_URL);
+  }
 }
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
@@ -627,10 +647,11 @@ const server = http.createServer((req, res) => {
       };
     }
     json({
-      status:    'ok',
-      connected: tv.isConnected(),
-      brokers:   Object.keys(brokerScrapers),
-      poUrlSet:  !!process.env.PO_CHART_URL,
+      status:       'ok',
+      connected:    tv.isConnected(),
+      chromeReady:  _chromeReady,
+      brokers:      Object.keys(brokerScrapers),
+      poUrlSet:     !!process.env.PO_CHART_URL,
       scraperStatus,
     });
     return;
@@ -657,4 +678,7 @@ server.listen(PORT, () => {
     fetch('https://euro-trade-proxy.onrender.com/health')
       .catch(() => {});
   }, 5 * 60 * 1000);
+
+  // Install Chrome then start scrapers (server is already listening so health checks pass)
+  _ensureChrome().then(_startAllScrapers);
 });
