@@ -133,7 +133,8 @@ class OTCScraper {
     try {
       let puppeteer;
       try { puppeteer = require('puppeteer'); }
-      catch (_) {
+      catch (e) {
+        this._lastError = 'puppeteer not installed: ' + e.message;
         console.error('[OTC] puppeteer not installed — run: npm install puppeteer');
         return;
       }
@@ -164,6 +165,7 @@ class OTCScraper {
       });
       await this._navigateToTrading(email, password);
     } catch (err) {
+      this._lastError = err.message;
       console.error(`[OTC:${this._brokerName}] Start error:`, err.message);
       if (!this._destroyed) this._scheduleRestart(30000);
     }
@@ -268,6 +270,7 @@ class OTCScraper {
       }, 5 * 60 * 1000);
 
     } catch (err) {
+      this._lastError = 'nav: ' + err.message;
       console.error(`[OTC:${this._brokerName}] Navigation error:`, err.message);
       if (!this._destroyed) this._scheduleRestart(60000);
     }

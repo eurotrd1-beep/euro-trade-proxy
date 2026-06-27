@@ -592,7 +592,16 @@ const server = http.createServer((req, res) => {
 
   // ── GET /health ───────────────────────────────────────────────────────────
   if (url.pathname === '/health') {
-    json({ status: 'ok', connected: tv.isConnected(), brokers: Object.keys(brokerScrapers) });
+    const scraperStatus = {};
+    for (const [name, s] of Object.entries(brokerScrapers)) {
+      scraperStatus[name] = {
+        ready:     s._ready     || false,
+        destroyed: s._destroyed || false,
+        lastError: s._lastError || null,
+        pairsCount: otcGetPairs(name).length,
+      };
+    }
+    json({ status: 'ok', connected: tv.isConnected(), brokers: Object.keys(brokerScrapers), scraperStatus });
     return;
   }
 
