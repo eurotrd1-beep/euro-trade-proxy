@@ -136,11 +136,17 @@ class OTCScraper {
     }
     try {
       let puppeteer;
-      try { puppeteer = require('puppeteer'); }
-      catch (e) {
-        this._lastError = 'puppeteer not installed: ' + e.message;
-        console.error('[OTC] puppeteer not installed — run: npm install puppeteer');
-        return;
+      try {
+        puppeteer = require('puppeteer-extra');
+        const stealth = require('puppeteer-extra-plugin-stealth');
+        puppeteer.use(stealth());
+      } catch (_) {
+        try { puppeteer = require('puppeteer'); }
+        catch (e) {
+          this._lastError = 'puppeteer not installed: ' + e.message;
+          console.error('[OTC] puppeteer not installed');
+          return;
+        }
       }
       this._status = 'launching browser';
       console.log(`[OTC:${this._brokerName}] Launching browser for ${this._chartUrl}`);
