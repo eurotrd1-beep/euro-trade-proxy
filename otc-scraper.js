@@ -129,7 +129,8 @@ class OTCScraper {
     const email    = process.env.PO_EMAIL;
     const password = process.env.PO_PASSWORD;
     if (!email || !password) {
-      console.warn(`[OTC:${this._brokerName}] PO_EMAIL / PO_PASSWORD not set — scraper disabled.`);
+      this._lastError = 'PO_EMAIL / PO_PASSWORD not set in environment';
+      console.warn(`[OTC:${this._brokerName}] ${this._lastError}`);
       return;
     }
     try {
@@ -221,7 +222,13 @@ class OTCScraper {
     try {
       console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
       // Use 'load' — trading pages have persistent WS connections so 'networkidle2' never fires
-      await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
+      // 'detached' error = redirect happened mid-navigation — safe to ignore, page still loaded
+      try {
+        await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
+      } catch (gotoErr) {
+        if (!gotoErr.message.toLowerCase().includes('detach')) throw gotoErr;
+        console.log(`[OTC:${this._brokerName}] Redirect detected (frame detached) — continuing`);
+      }
 
       let currentUrl = page.url();
       console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
