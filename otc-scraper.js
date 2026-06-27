@@ -173,6 +173,10 @@ class OTCScraper {
           '--disable-gpu', '--disable-extensions', '--disable-background-networking',
           '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
           '--disable-breakpad', '--disable-sync', '--metrics-recording-only',
+          // Memory savings for 512MB Render free tier
+          '--disable-software-rasterizer', '--disable-default-apps',
+          '--disable-translate', '--disable-plugins', '--disable-hang-monitor',
+          '--renderer-process-limit=1', '--js-flags=--max-old-space-size=128',
         ],
       });
       this._page = await this._browser.newPage();
@@ -185,7 +189,8 @@ class OTCScraper {
       await this._page.exposeFunction('__otcSpy', (data) => this._parseMsg(data));
       this._browser.on('disconnected', () => {
         if (!this._destroyed) {
-          console.warn(`[OTC:${this._brokerName}] Browser disconnected — restarting in 30s`);
+          this._lastError = 'Browser disconnected (OOM crash?)';
+          console.warn(`[OTC:${this._brokerName}] ${this._lastError} — restarting in 30s`);
           this._scheduleRestart(30000);
         }
       });
