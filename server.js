@@ -612,6 +612,27 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ── POST /api/admin/po-session  body: { cookies: [...] } ────────────────
+  if (url.pathname === '/api/admin/po-session' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { cookies } = JSON.parse(body);
+        if (!Array.isArray(cookies)) { res.writeHead(400); res.end('cookies must be array'); return; }
+        fs.writeFileSync(path.join(__dirname, 'po_session.json'), JSON.stringify(cookies));
+        // Restart scraper with new cookies
+        for (const [name, s] of Object.entries(brokerScrapers)) {
+          s.destroy();
+          delete brokerScrapers[name];
+        }
+        setTimeout(_startAllScrapers, 2000);
+        json({ ok: true, count: cookies.length });
+      } catch (e) { res.writeHead(400); res.end('Invalid JSON'); }
+    });
+    return;
+  }
+
   // ── POST /api/admin/sync-broker  body: { name, chartUrl } ──────────────
   if (url.pathname === '/api/admin/sync-broker' && req.method === 'POST') {
     let body = '';

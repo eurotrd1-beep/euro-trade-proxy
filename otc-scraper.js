@@ -209,7 +209,14 @@ class OTCScraper {
           this._scheduleRestart(30000);
         }
       });
-      await this._navigateToTrading(email, password);
+      // Load session cookies if saved
+      let sessionCookies = null;
+      try {
+        const fs2 = require('fs');
+        const cookiePath = require('path').join(__dirname, 'po_session.json');
+        if (fs2.existsSync(cookiePath)) sessionCookies = JSON.parse(fs2.readFileSync(cookiePath, 'utf8'));
+      } catch (_) {}
+      await this._navigateToTrading(email, password, sessionCookies);
     } catch (err) {
       this._lastError = err.message;
       console.error(`[OTC:${this._brokerName}] Start error:`, err.message);
@@ -237,9 +244,14 @@ class OTCScraper {
     }, ms);
   }
 
-  async _navigateToTrading(email, password) {
+  async _navigateToTrading(email, password, cookies) {
     const page = this._page;
     try {
+      // Inject session cookies if available (bypasses login form + datacenter IP block)
+      if (cookies && cookies.length) {
+        await page.setCookie(...cookies);
+        console.log(`[OTC:${this._brokerName}] Injected ${cookies.length} session cookies`);
+      }
       this._status = 'navigating to chart';
       console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
       // Use 'load' — trading pages have persistent WS connections so 'networkidle2' never fires
