@@ -640,6 +640,7 @@ const server = http.createServer((req, res) => {
       scraperStatus[name] = {
         ready:      s._ready      || false,
         destroyed:  s._destroyed  || false,
+        status:     s._status     || 'unknown',
         lastError:  s._lastError  || null,
         tickCount:  s._tickCount  || 0,
         lastTickAt: s._lastTickAt || null,

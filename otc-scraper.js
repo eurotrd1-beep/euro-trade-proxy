@@ -122,6 +122,7 @@ class OTCScraper {
     this._heartbeatTimer = null;
     this._tickCount  = 0;
     this._lastTickAt = null;
+    this._status     = 'idle';
   }
 
   async start() {
@@ -141,6 +142,7 @@ class OTCScraper {
         console.error('[OTC] puppeteer not installed — run: npm install puppeteer');
         return;
       }
+      this._status = 'launching browser';
       console.log(`[OTC:${this._brokerName}] Launching browser for ${this._chartUrl}`);
 
       // Find whatever Chrome version was installed by puppeteer browsers install
@@ -225,6 +227,7 @@ class OTCScraper {
   async _navigateToTrading(email, password) {
     const page = this._page;
     try {
+      this._status = 'navigating to chart';
       console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
       // Use 'load' — trading pages have persistent WS connections so 'networkidle2' never fires
       // 'detached' error = redirect happened mid-navigation — safe to ignore, page still loaded
@@ -236,11 +239,13 @@ class OTCScraper {
       }
 
       let currentUrl = page.url();
+      this._status = 'landed: ' + currentUrl;
       console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
 
       // If redirected to a login/auth page, auto-login
       const isLoginPage = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
       if (isLoginPage) {
+        this._status = 'filling login form';
         console.log(`[OTC:${this._brokerName}] Login page detected — filling credentials`);
 
         // Wait for any email/username field
@@ -272,8 +277,10 @@ class OTCScraper {
           await page.click('button[type="submit"], input[type="submit"], form button, .btn-login, .auth-button');
         } catch (_) {}
 
+        this._status = 'waiting for post-login navigation';
         await page.waitForNavigation({ waitUntil: 'load', timeout: 40000 }).catch(() => {});
         currentUrl = page.url();
+        this._status = 'post-login: ' + currentUrl;
         console.log(`[OTC:${this._brokerName}] Post-login URL: ${currentUrl}`);
 
         const stillOnLogin = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
