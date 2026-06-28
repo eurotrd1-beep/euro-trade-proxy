@@ -493,21 +493,31 @@ function tvHttpPost(url, body) {
     const u = new URL(url);
     const req = https.request({
       hostname: u.hostname,
+      port:     443,
       path:     u.pathname + u.search,
       method:   'POST',
       headers: {
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124',
+        'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':         'application/json, text/plain, */*',
+        'Accept-Language':'en-US,en;q=0.9',
         'Origin':         'https://www.tradingview.com',
-        'Referer':        'https://www.tradingview.com/',
+        'Referer':        'https://www.tradingview.com/markets/currencies/rates-all/',
       },
     }, (resp) => {
       let data = '';
       resp.on('data', c => data += c);
-      resp.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
+      resp.on('end', () => {
+        if (resp.statusCode !== 200) {
+          return reject(new Error(`HTTP ${resp.statusCode}: ${data.slice(0, 200)}`));
+        }
+        try { resolve(JSON.parse(data)); }
+        catch(e) { reject(new Error(`JSON parse failed: ${data.slice(0, 200)}`)); }
+      });
     });
     req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(); reject(new Error('timeout')); });
     req.write(payload);
     req.end();
   });
@@ -543,13 +553,15 @@ function formatPairSymbol(name, exchange) {
   return name;
 }
 
-let _scrapeRunning   = false;
+let _scrapeRunning    = false;
 let _scrapeLastResult = null;
+const _scrapeJobLog   = [];   // keeps last run's per-job results for debug
 
 async function scrapeAllPairs() {
   if (!db) throw new Error('Firestore not initialized');
   if (_scrapeRunning) return;
   _scrapeRunning = true;
+  _scrapeJobLog.length = 0;
 
   const collected = [];
   const seen      = new Set();
@@ -579,53 +591,62 @@ async function scrapeAllPairs() {
   };
 
   const jobs = [
-    // Forex + metals + commodities via OANDA
-    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'OANDA'  }], range: [0, 1000], fallback: 'forex' },
-    // Forex via FXCM
-    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'FXCM'   }], range: [0, 300],  fallback: 'forex' },
-    // Forex general (catches other brokers)
-    { screener: 'forex',  filter: [],                                                           range: [0, 500],  fallback: 'forex' },
-    // Crypto BINANCE USDT pairs
+    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'OANDA'   }], range: [0, 1000], fallback: 'forex'  },
+    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'FXCM'    }], range: [0, 300],  fallback: 'forex'  },
+    { screener: 'forex',  filter: [],                                                            range: [0, 500],  fallback: 'forex'  },
     { screener: 'crypto', filter: [
         { left: 'exchange',      operation: 'equal', right: 'BINANCE' },
         { left: 'currency_code', operation: 'equal', right: 'USDT'    },
       ], range: [0, 500], fallback: 'crypto' },
-    // Crypto COINBASE
     { screener: 'crypto', filter: [{ left: 'exchange', operation: 'equal', right: 'COINBASE' }], range: [0, 200], fallback: 'crypto' },
-    // Crypto BYBIT USDT
     { screener: 'crypto', filter: [
         { left: 'exchange',      operation: 'equal', right: 'BYBIT' },
         { left: 'currency_code', operation: 'equal', right: 'USDT'  },
       ], range: [0, 300], fallback: 'crypto' },
   ];
 
-  for (const job of jobs) {
-    try {
-      const res = await tvScreenerScan(job.screener, job.filter, job.range);
-      const n   = ingest(res.data, job.fallback);
+  try {
+    for (const job of jobs) {
       const tag = job.filter[0] ? job.filter[0].right : 'all';
-      console.log(`[scrape] ${job.screener}/${tag}: +${n} (total ${collected.length})`);
-    } catch (e) {
-      console.error('[scrape] job error:', e.message);
+      try {
+        const res = await tvScreenerScan(job.screener, job.filter, job.range);
+        const n   = ingest(res.data, job.fallback);
+        const entry = { job: `${job.screener}/${tag}`, added: n, total: collected.length, ok: true };
+        _scrapeJobLog.push(entry);
+        console.log(`[scrape] ${entry.job}: +${n} (running total ${collected.length})`);
+      } catch (e) {
+        const entry = { job: `${job.screener}/${tag}`, ok: false, error: e.message };
+        _scrapeJobLog.push(entry);
+        console.error('[scrape] job error:', e.message);
+      }
     }
-  }
 
-  // Batch write to Firestore (max 499 per batch)
-  for (let i = 0; i < collected.length; i += 499) {
-    const batch = db.batch();
-    for (const pair of collected.slice(i, i + 499)) {
-      const docId = pair.chartSymbol.replace(/[:/]/g, '_');
-      batch.set(db.collection('all_pairs').doc(docId),
-        { ...pair, scrapedAt: Date.now() },
-        { merge: true }   // preserves existing 'visible' and 'pairsDocId'
-      );
+    if (collected.length === 0) {
+      throw new Error('all screener jobs returned 0 pairs — TradingView API may be blocking server requests');
     }
-    await batch.commit();
-  }
 
-  _scrapeRunning    = false;
-  _scrapeLastResult = { count: collected.length, at: Date.now() };
-  console.log(`[scrape] done — ${collected.length} total pairs saved`);
+    // Batch write to Firestore (max 499 per batch)
+    for (let i = 0; i < collected.length; i += 499) {
+      const batch = db.batch();
+      for (const pair of collected.slice(i, i + 499)) {
+        const docId = pair.chartSymbol.replace(/[:/]/g, '_');
+        batch.set(db.collection('all_pairs').doc(docId),
+          { ...pair, scrapedAt: Date.now() },
+          { merge: true }
+        );
+      }
+      await batch.commit();
+      console.log(`[scrape] Firestore batch ${Math.floor(i / 499) + 1} committed`);
+    }
+
+    _scrapeLastResult = { count: collected.length, at: Date.now(), error: null, jobs: _scrapeJobLog };
+    console.log(`[scrape] done — ${collected.length} pairs saved to Firestore`);
+  } catch (e) {
+    _scrapeLastResult = { count: 0, at: Date.now(), error: e.message, jobs: _scrapeJobLog };
+    console.error('[scrape] fatal:', e.message);
+  } finally {
+    _scrapeRunning = false;
+  }
   return collected.length;
 }
 
@@ -681,15 +702,47 @@ const server = http.createServer((req, res) => {
   // ── POST /api/scrape-pairs — trigger full pair library scrape ────────────
   if (url.pathname === '/api/scrape-pairs' && req.method === 'POST') {
     if (_scrapeRunning) { json({ status: 'running' }); return; }
-    if (!db)            { json({ error: 'Firestore not available' }, 503); return; }
+    if (!db)            { json({ error: 'Firestore not available — FIREBASE_SERVICE_ACCOUNT env var missing?' }, 503); return; }
     json({ status: 'started' });
-    scrapeAllPairs().catch(e => console.error('[scrape] fatal:', e.message));
+    scrapeAllPairs();
     return;
   }
 
   // ── GET /api/scrape-pairs/status — polling endpoint ──────────────────────
   if (url.pathname === '/api/scrape-pairs/status') {
-    json({ running: _scrapeRunning, last: _scrapeLastResult });
+    json({ running: _scrapeRunning, last: _scrapeLastResult, jobs: _scrapeJobLog });
+    return;
+  }
+
+  // ── GET /api/scrape-test — debug: test one TradingView screener call ─────
+  if (url.pathname === '/api/scrape-test') {
+    try {
+      const res = await tvScreenerScan(
+        'forex',
+        [{ left: 'exchange', operation: 'equal', right: 'OANDA' }],
+        [0, 5]
+      );
+      json({
+        ok:       true,
+        count:    res.data?.length ?? 0,
+        sample:   res.data?.[0] ?? null,
+        firestore: db ? 'connected' : 'not connected',
+      });
+    } catch (e) {
+      json({ ok: false, error: e.message, firestore: db ? 'connected' : 'not connected' });
+    }
+    return;
+  }
+
+  // ── GET /api/db-test — debug: test Firestore write ───────────────────────
+  if (url.pathname === '/api/db-test') {
+    if (!db) { json({ ok: false, error: 'Firestore not initialized' }); return; }
+    try {
+      await db.collection('_test').doc('ping').set({ t: Date.now() });
+      json({ ok: true, msg: 'Firestore write succeeded' });
+    } catch (e) {
+      json({ ok: false, error: e.message });
+    }
     return;
   }
 
