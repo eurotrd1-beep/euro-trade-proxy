@@ -379,14 +379,20 @@ class TVClient {
     } else {
       if (!this.candles[key]) return;
       let newCandle = false;
+      const arr = this.candles[key];
       for (const b of sds.s) {
         const bar = { t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] };
-        const idx = b.i;
-        if (idx >= this.candles[key].length) { this.candles[key].push(bar); newCandle = true; }
-        else this.candles[key][idx] = bar;
+        const last = arr.length ? arr[arr.length - 1] : null;
+        if (last && last.t === bar.t) {
+          // Update existing last candle in-place (same period)
+          arr[arr.length - 1] = bar;
+        } else if (!last || bar.t > last.t) {
+          // New candle — push and trim sliding window
+          arr.push(bar);
+          if (arr.length > MAX) arr.shift();
+          newCandle = true;
+        }
       }
-      // Sliding window: trim oldest when over limit
-      if (this.candles[key].length > MAX) this.candles[key].splice(0, this.candles[key].length - MAX);
       if (newCandle) this._schedSave(key);
     }
   }
