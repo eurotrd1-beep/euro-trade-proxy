@@ -5,6 +5,47 @@ const fs   = require('fs');
 const path = require('path');
 const { WebSocket, WebSocketServer } = require('ws');
 
+// ── Firebase Admin (Firestore persistence) ────────────────────────────────────
+let db = null;
+try {
+  const admin = require('firebase-admin');
+  const raw   = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (raw) {
+    admin.initializeApp({ credential: admin.credential.cert(JSON.parse(raw)) });
+    db = admin.firestore();
+    console.log('[Firestore] initialized');
+  } else {
+    console.warn('[Firestore] FIREBASE_SERVICE_ACCOUNT not set — using disk only');
+  }
+} catch (e) {
+  console.error('[Firestore] init failed:', e.message, '— using disk only');
+}
+
+// Sanitize key for Firestore doc ID (no colons or slashes)
+function fsDocId(key) { return key.replace(/[:/]/g, '_'); }
+
+async function fsLoad(key) {
+  if (!db) return null;
+  try {
+    const snap = await db.collection('tv_cache').doc(fsDocId(key)).get();
+    if (snap.exists) {
+      const data = snap.data();
+      if (Array.isArray(data.candles) && data.candles.length) return data.candles;
+    }
+  } catch (e) { console.error('[Firestore] load error:', key, e.message); }
+  return null;
+}
+
+async function fsSave(key, candles) {
+  if (!db || !candles || !candles.length) return;
+  try {
+    await db.collection('tv_cache').doc(fsDocId(key)).set(
+      { candles, updated: Date.now() },
+      { merge: false }
+    );
+  } catch (e) { console.error('[Firestore] save error:', key, e.message); }
+}
+
 // ── Browser WebSocket clients ─────────────────────────────────────────────────
 const wss       = new WebSocketServer({ noServer: true });
 const clientMap = new Map(); // ws → Set<tvSym>
@@ -138,6 +179,7 @@ class TVClient {
   // ── Persistence ──────────────────────────────────────────────────────────────
 
   _loadAll() {
+    // Load from disk first (fast, synchronous) as immediate baseline
     try {
       const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json'));
       for (const file of files) {
@@ -146,19 +188,51 @@ class TVClient {
           const data = JSON.parse(raw);
           if (data.key && Array.isArray(data.candles) && data.candles.length) {
             this.candles[data.key] = data.candles;
-            console.log(`[store] loaded ${data.candles.length} candles for ${data.key}`);
+            console.log(`[disk] loaded ${data.candles.length} candles for ${data.key}`);
           }
         } catch (_) {}
       }
     } catch (_) {}
+
+    // Then hydrate from Firestore for all AUTO_SYMBOLS (overrides disk with fresher data)
+    if (db) {
+      const self = this;
+      const keys = [];
+      AUTO_SYMBOLS.forEach(sym => AUTO_IVS.forEach(iv => keys.push(`${sym}_${iv}`)));
+      let loaded = 0;
+      keys.forEach(key => {
+        fsLoad(key).then(candles => {
+          if (candles) {
+            const disk = self.candles[key];
+            // Use Firestore data if it has more candles or fresher last candle
+            if (!disk || candles.length >= disk.length) {
+              self.candles[key] = candles;
+              console.log(`[Firestore] hydrated ${candles.length} candles for ${key}`);
+            }
+          }
+          loaded++;
+          if (loaded === keys.length) console.log('[Firestore] hydration complete');
+        });
+      });
+    }
+  }
+
+  _schedSave(key) {
+    // Debounce: save 3 seconds after last new candle to avoid hammering storage
+    if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
+    this._saveTimers[key] = setTimeout(() => {
+      delete this._saveTimers[key];
+      this._saveCandles(key);
+    }, 3000);
   }
 
   _saveCandles(key) {
-    try {
-      const candles = this.candles[key];
-      if (!candles || !candles.length) return;
-      fs.writeFileSync(keyToFile(key), JSON.stringify({ key, candles }));
-    } catch (_) {}
+    const candles = this.candles[key];
+    if (!candles || !candles.length) return;
+    // Disk (sync, fast fallback)
+    try { fs.writeFileSync(keyToFile(key), JSON.stringify({ key, candles })); } catch (_) {}
+    // Firestore (async, persistent across restarts)
+    fsSave(key, candles);
   }
 
   _saveAll() {
@@ -294,7 +368,7 @@ class TVClient {
     const sds = data && data['sds_1'];
     if (!sds || !sds.s) return;
 
-    const MAX = 200;
+    const MAX = 150;
 
     if (full) {
       const all = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
@@ -346,7 +420,7 @@ class TVClient {
     const tvIv = ivToTV(iv);
     this._send({ m: 'chart_create_session', p: [cs, ''] });
     this._send({ m: 'resolve_symbol',       p: [cs, 'sds_sym_1', `={"symbol":"${tvSym}","adjustment":"splits"}`] });
-    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 200] });
+    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 150] });
   }
 
   subscribe(tvSym, iv) {
