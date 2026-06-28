@@ -37,9 +37,8 @@ function findChrome() {
 
   console.log('\n>>> Log in to Pocket Option in the browser, then come back here and press ENTER <<<\n');
   await new Promise(resolve => {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.once('data', () => { process.stdin.setRawMode(false); resolve(); });
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('', () => { rl.close(); resolve(); });
   });
   console.log('Collecting cookies from:', page.url());
 

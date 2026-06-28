@@ -252,76 +252,94 @@ class OTCScraper {
     }, ms);
   }
 
+  // Returns true for any Puppeteer error caused by a frame/target detaching during navigation
+  _isDetachError(err) {
+    const msg = (err && err.message || '').toLowerCase();
+    return msg.includes('detach') || msg.includes('target closed') ||
+           msg.includes('execution context') || msg.includes('session closed') ||
+           msg.includes('protocol error') || msg.includes('context was destroyed');
+  }
+
+  async _safeGoto(page, url) {
+    try {
+      await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+    } catch (e) {
+      if (!this._isDetachError(e)) throw e;
+      console.log(`[OTC:${this._brokerName}] Frame detach on goto — continuing`);
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  async _safeUrl(page) {
+    for (let i = 0; i < 3; i++) {
+      try { return page.url(); } catch (_) {}
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    return '';
+  }
+
   async _navigateToTrading(email, password, cookies) {
     const page = this._page;
     try {
-      // Inject session cookies if available (bypasses login form + datacenter IP block)
       if (cookies && cookies.length) {
         await page.setCookie(...cookies);
         console.log(`[OTC:${this._brokerName}] Injected ${cookies.length} session cookies`);
       }
       this._status = 'navigating to chart';
       console.log(`[OTC:${this._brokerName}] Navigating to ${this._chartUrl}`);
-      // Use 'load' — trading pages have persistent WS connections so 'networkidle2' never fires
-      // 'detached' error = redirect happened mid-navigation — safe to ignore, page still loaded
-      try {
-        await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
-      } catch (gotoErr) {
-        if (!gotoErr.message.toLowerCase().includes('detach')) throw gotoErr;
-        console.log(`[OTC:${this._brokerName}] Redirect detected (frame detached) — continuing`);
-      }
 
-      // After a frame-detach redirect, page.url() may throw briefly — retry after short wait
-      let currentUrl = '';
-      try { currentUrl = page.url(); } catch (_) {
-        await new Promise(r => setTimeout(r, 2000));
-        try { currentUrl = page.url(); } catch (_2) { currentUrl = ''; }
-      }
+      await this._safeGoto(page, this._chartUrl);
+
+      let currentUrl = await this._safeUrl(page);
       this._status = 'landed: ' + currentUrl;
       console.log(`[OTC:${this._brokerName}] Landed at: ${currentUrl}`);
 
-      // If redirected to a login/auth page, auto-login
       const isLoginPage = /\/(login|sign[-_]?in|auth|signin)\b/i.test(currentUrl);
       if (isLoginPage) {
         this._status = 'filling login form';
         console.log(`[OTC:${this._brokerName}] Login page detected — filling credentials`);
 
-        // Wait for form inputs to appear
         await page.waitForSelector('input[type="password"]', { timeout: 20000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 1000));
 
-        // Use CDP-level keyboard simulation (isTrusted=true) via elementHandle.type()
-        // This is required because PO checks event.isTrusted on React form events
-        const emailEl = await page.$('input[type="email"]')
-                     || await page.$('input[name="email"]')
-                     || await page.$('input[name="login"]')
-                     || await page.$('input[type="text"]');
-        if (emailEl) {
-          await emailEl.click({ clickCount: 3 }).catch(() => {});
-          await emailEl.type(email, { delay: 80 });
-        }
+        try {
+          const emailEl = await page.$('input[type="email"]')
+                       || await page.$('input[name="email"]')
+                       || await page.$('input[name="login"]')
+                       || await page.$('input[type="text"]');
+          if (emailEl) {
+            await emailEl.click({ clickCount: 3 }).catch(() => {});
+            await emailEl.type(email, { delay: 80 });
+          }
 
-        const pwdEl = await page.$('input[type="password"]');
-        if (pwdEl) {
-          await pwdEl.click().catch(() => {});
-          await pwdEl.type(password, { delay: 80 });
-        }
+          const pwdEl = await page.$('input[type="password"]');
+          if (pwdEl) {
+            await pwdEl.click().catch(() => {});
+            await pwdEl.type(password, { delay: 80 });
+          }
 
-        await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 500));
 
-        // Click submit button, fallback to Enter key
-        const submitBtn = await page.$('button[type="submit"]')
-                       || await page.$('input[type="submit"]')
-                       || await page.$('.btn-login');
-        if (submitBtn) {
-          await submitBtn.click().catch(() => {});
-        } else if (pwdEl) {
-          await pwdEl.press('Enter').catch(() => {});
+          const submitBtn = await page.$('button[type="submit"]')
+                         || await page.$('input[type="submit"]')
+                         || await page.$('.btn-login');
+          if (submitBtn) {
+            await submitBtn.click().catch(() => {});
+          } else if (pwdEl) {
+            await pwdEl.press('Enter').catch(() => {});
+          }
+        } catch (formErr) {
+          if (!this._isDetachError(formErr)) throw formErr;
+          console.log(`[OTC:${this._brokerName}] Frame detach during form fill — continuing`);
         }
 
         this._status = 'waiting for post-login navigation';
         await page.waitForNavigation({ waitUntil: 'load', timeout: 40000 }).catch(() => {});
-        currentUrl = page.url();
+
+        try { currentUrl = page.url(); } catch (_) {
+          await new Promise(r => setTimeout(r, 1500));
+          currentUrl = await this._safeUrl(page);
+        }
         this._status = 'post-login: ' + currentUrl;
         console.log(`[OTC:${this._brokerName}] Post-login URL: ${currentUrl}`);
 
@@ -333,21 +351,14 @@ class OTCScraper {
           return;
         }
 
-        // Navigate to the actual chart URL after login
         if (currentUrl !== this._chartUrl) {
-          try {
-            await page.goto(this._chartUrl, { waitUntil: 'load', timeout: 60000 });
-          } catch (gotoErr) {
-            if (!gotoErr.message.toLowerCase().includes('detach')) throw gotoErr;
-            console.log(`[OTC:${this._brokerName}] Redirect on chart nav (frame detached) — continuing`);
-          }
+          await this._safeGoto(page, this._chartUrl);
         }
       }
 
       console.log(`[OTC:${this._brokerName}] Trading page ready — WS spy active`);
       this._ready = true;
 
-      // Heartbeat: ping page every 5 min
       this._heartbeatTimer = setInterval(async () => {
         if (this._destroyed || !this._page) return;
         try {
