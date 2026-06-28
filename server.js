@@ -1,7 +1,8 @@
 'use strict';
 
-const http = require('http');
-const fs   = require('fs');
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
 const path  = require('path');
 const { WebSocket, WebSocketServer } = require('ws');
 
@@ -550,6 +551,47 @@ const server = http.createServer(async (req, res) => {
           order:    order    || Date.now(),
         });
         json({ id: ref.id });
+      } catch (e) { json({ error: e.message }, 500); }
+    });
+    return;
+  }
+
+  // ── POST /api/tv-scan — proxy TradingView scanner (bypasses browser CORS) ───
+  if (url.pathname === '/api/tv-scan' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      try {
+        const { market, offset } = JSON.parse(body || '{}');
+        if (!market) { json({ error: 'market required' }, 400); return; }
+        const scanBody = JSON.stringify({
+          columns: ['name', 'description', 'exchange', 'type', 'subtype'],
+          sort: { sortBy: 'name', sortOrder: 'asc' },
+          range: [offset || 0, (offset || 0) + 2000],
+        });
+        const options = {
+          hostname: 'scanner.tradingview.com',
+          path:     `/${market}/scan`,
+          method:   'POST',
+          headers: {
+            'Content-Type':   'application/json',
+            'Content-Length': Buffer.byteLength(scanBody),
+            'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Origin':         'https://www.tradingview.com',
+            'Referer':        'https://www.tradingview.com/',
+          },
+        };
+        const tvReq = https.request(options, (tvRes) => {
+          let data = '';
+          tvRes.on('data', c => { data += c; });
+          tvRes.on('end', () => {
+            res.writeHead(tvRes.statusCode, { 'Content-Type': 'application/json' });
+            res.end(data);
+          });
+        });
+        tvReq.on('error', e => json({ error: e.message }, 500));
+        tvReq.write(scanBody);
+        tvReq.end();
       } catch (e) { json({ error: e.message }, 500); }
     });
     return;
