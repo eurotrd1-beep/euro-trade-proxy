@@ -655,7 +655,7 @@ async function scrapeAllPairs() {
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
@@ -743,6 +743,39 @@ const server = http.createServer((req, res) => {
     } catch (e) {
       json({ ok: false, error: e.message });
     }
+    return;
+  }
+
+  // ── POST /api/pairs — add a pair (uses Admin SDK, bypasses Firestore rules) ──
+  if (url.pathname === '/api/pairs' && req.method === 'POST') {
+    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      try {
+        const { symbol, chartSymbol, category, type, order } = JSON.parse(body || '{}');
+        if (!symbol || !chartSymbol) { json({ error: 'symbol and chartSymbol required' }, 400); return; }
+        const ref = await db.collection('pairs').add({
+          symbol, chartSymbol,
+          category: category || 'forex',
+          type:     type     || category || 'forex',
+          order:    order    || Date.now(),
+        });
+        json({ id: ref.id });
+      } catch (e) { json({ error: e.message }, 500); }
+    });
+    return;
+  }
+
+  // ── DELETE /api/pairs/:docId — remove a pair ─────────────────────────────
+  if (url.pathname.startsWith('/api/pairs/') && req.method === 'DELETE') {
+    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    const docId = url.pathname.replace('/api/pairs/', '').trim();
+    if (!docId) { json({ error: 'docId required' }, 400); return; }
+    try {
+      await db.collection('pairs').doc(docId).delete();
+      json({ ok: true });
+    } catch (e) { json({ error: e.message }, 500); }
     return;
   }
 
