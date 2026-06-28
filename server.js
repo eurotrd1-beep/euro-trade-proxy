@@ -1,8 +1,9 @@
 'use strict';
 
-const http = require('http');
-const fs   = require('fs');
-const path = require('path');
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 const { WebSocket, WebSocketServer } = require('ws');
 
 // ── Firebase Admin (Firestore persistence) ────────────────────────────────────
@@ -484,6 +485,150 @@ const tv = new TVClient();
 // Save all candles to disk every 60 s, regardless of user activity
 setInterval(() => tv._saveAll(), 60_000);
 
+// ── Pair Library Scraper ──────────────────────────────────────────────────────
+
+function tvHttpPost(url, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname,
+      path:     u.pathname + u.search,
+      method:   'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124',
+        'Origin':         'https://www.tradingview.com',
+        'Referer':        'https://www.tradingview.com/',
+      },
+    }, (resp) => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function tvScreenerScan(screener, filter, range) {
+  const body = {
+    columns: ['name', 'description', 'exchange', 'subtype'],
+    sort:    { sortBy: 'name', sortOrder: 'asc' },
+    range:   range || [0, 500],
+  };
+  if (filter && filter.length) body.filter = filter;
+  return tvHttpPost(`https://scanner.tradingview.com/${screener}/scan`, body);
+}
+
+function detectPairCategory(name, exchange) {
+  const s = name.toUpperCase();
+  if (/^X(AU|AG|PT|PD)|GOLD|SILVER|PLAT|PALL/.test(s)) return 'metals';
+  if (/OIL|BRENT|WTI|NGAS|NATGAS|WHEAT|CORN|SUGAR|COFFE|COCOA|COTTON|SOYB|NICKEL|COPPER|ZINC|ALUM/.test(s)) return 'commodities';
+  const cryptoEx = ['BINANCE','COINBASE','BYBIT','KRAKEN','KUCOIN','BITFINEX','GEMINI','HUOBI','OKX'];
+  if (cryptoEx.includes(exchange.toUpperCase())) return 'crypto';
+  return 'forex';
+}
+
+function formatPairSymbol(name, exchange) {
+  const cryptoEx = ['BINANCE','COINBASE','BYBIT','KRAKEN','KUCOIN','BITFINEX','GEMINI','HUOBI','OKX'];
+  if (cryptoEx.includes(exchange.toUpperCase())) {
+    const m = name.match(/^(.+?)(USDT|USDC|USD|BTC|ETH|BNB|BUSD|EUR|TUSD)$/);
+    if (m) return `${m[1]}/${m[2]}`;
+    return name;
+  }
+  if (name.length === 6) return `${name.slice(0, 3)}/${name.slice(3)}`;
+  return name;
+}
+
+let _scrapeRunning   = false;
+let _scrapeLastResult = null;
+
+async function scrapeAllPairs() {
+  if (!db) throw new Error('Firestore not initialized');
+  if (_scrapeRunning) return;
+  _scrapeRunning = true;
+
+  const collected = [];
+  const seen      = new Set();
+
+  const ingest = (items, fallbackCat) => {
+    if (!Array.isArray(items)) return 0;
+    let n = 0;
+    for (const item of items) {
+      const [name, desc, exchange, subtype] = item.d || [];
+      if (!name || !exchange) continue;
+      const cs = `${exchange.toUpperCase()}:${name.toUpperCase()}`;
+      if (seen.has(cs)) continue;
+      seen.add(cs);
+      const cat = detectPairCategory(name, exchange) || fallbackCat;
+      collected.push({
+        chartSymbol: cs,
+        symbol:      formatPairSymbol(name.toUpperCase(), exchange.toUpperCase()),
+        name:        desc || name,
+        exchange:    exchange.toUpperCase(),
+        category:    cat,
+        subcategory: subtype || '',
+        source:      'tradingview',
+      });
+      n++;
+    }
+    return n;
+  };
+
+  const jobs = [
+    // Forex + metals + commodities via OANDA
+    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'OANDA'  }], range: [0, 1000], fallback: 'forex' },
+    // Forex via FXCM
+    { screener: 'forex',  filter: [{ left: 'exchange', operation: 'equal', right: 'FXCM'   }], range: [0, 300],  fallback: 'forex' },
+    // Forex general (catches other brokers)
+    { screener: 'forex',  filter: [],                                                           range: [0, 500],  fallback: 'forex' },
+    // Crypto BINANCE USDT pairs
+    { screener: 'crypto', filter: [
+        { left: 'exchange',      operation: 'equal', right: 'BINANCE' },
+        { left: 'currency_code', operation: 'equal', right: 'USDT'    },
+      ], range: [0, 500], fallback: 'crypto' },
+    // Crypto COINBASE
+    { screener: 'crypto', filter: [{ left: 'exchange', operation: 'equal', right: 'COINBASE' }], range: [0, 200], fallback: 'crypto' },
+    // Crypto BYBIT USDT
+    { screener: 'crypto', filter: [
+        { left: 'exchange',      operation: 'equal', right: 'BYBIT' },
+        { left: 'currency_code', operation: 'equal', right: 'USDT'  },
+      ], range: [0, 300], fallback: 'crypto' },
+  ];
+
+  for (const job of jobs) {
+    try {
+      const res = await tvScreenerScan(job.screener, job.filter, job.range);
+      const n   = ingest(res.data, job.fallback);
+      const tag = job.filter[0] ? job.filter[0].right : 'all';
+      console.log(`[scrape] ${job.screener}/${tag}: +${n} (total ${collected.length})`);
+    } catch (e) {
+      console.error('[scrape] job error:', e.message);
+    }
+  }
+
+  // Batch write to Firestore (max 499 per batch)
+  for (let i = 0; i < collected.length; i += 499) {
+    const batch = db.batch();
+    for (const pair of collected.slice(i, i + 499)) {
+      const docId = pair.chartSymbol.replace(/[:/]/g, '_');
+      batch.set(db.collection('all_pairs').doc(docId),
+        { ...pair, scrapedAt: Date.now() },
+        { merge: true }   // preserves existing 'visible' and 'pairsDocId'
+      );
+    }
+    await batch.commit();
+  }
+
+  _scrapeRunning    = false;
+  _scrapeLastResult = { count: collected.length, at: Date.now() };
+  console.log(`[scrape] done — ${collected.length} total pairs saved`);
+  return collected.length;
+}
+
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
@@ -530,6 +675,21 @@ const server = http.createServer((req, res) => {
   // ── GET /health ───────────────────────────────────────────────────────────
   if (url.pathname === '/health') {
     json({ status: 'ok', connected: tv.isConnected() });
+    return;
+  }
+
+  // ── POST /api/scrape-pairs — trigger full pair library scrape ────────────
+  if (url.pathname === '/api/scrape-pairs' && req.method === 'POST') {
+    if (_scrapeRunning) { json({ status: 'running' }); return; }
+    if (!db)            { json({ error: 'Firestore not available' }, 503); return; }
+    json({ status: 'started' });
+    scrapeAllPairs().catch(e => console.error('[scrape] fatal:', e.message));
+    return;
+  }
+
+  // ── GET /api/scrape-pairs/status — polling endpoint ──────────────────────
+  if (url.pathname === '/api/scrape-pairs/status') {
+    json({ running: _scrapeRunning, last: _scrapeLastResult });
     return;
   }
 
