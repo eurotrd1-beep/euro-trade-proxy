@@ -115,7 +115,12 @@ function bareSymbol(sym) {
 
 // Find the full prefixed symbol we have data for, fallback to OANDA:bare
 function normalizeSymbol(sym) {
+  if (sym.includes(':')) return sym.toUpperCase();
   const bare = bareSymbol(sym);
+  // Check AUTO_SYMBOLS first
+  for (const auto of AUTO_SYMBOLS) {
+    if (bareSymbol(auto) === bare) return auto;
+  }
   // Check candle store for any exchange that has this symbol
   for (const key of Object.keys(tv.candles)) {
     const keySym = key.replace(/_[^_]+$/, ''); // strip "_1m" etc
