@@ -400,11 +400,22 @@ class TVClient {
     const cTime = Math.floor(now / ivSec) * ivSec;
     const last  = arr[arr.length - 1];
     if (cTime === last.t) {
+      // Same candle — update OHLC
       if (price > last.h) last.h = price;
       if (price < last.l) last.l = price;
       last.c = price;
     } else if (cTime > last.t) {
-      arr.push({ t: cTime, o: price, h: price, l: price, c: price });
+      const gapCandles = (cTime - last.t) / ivSec;
+      if (gapCandles <= 3) {
+        // Continuous market (small gap) — open new candle
+        arr.push({ t: cTime, o: price, h: price, l: price, c: price });
+        if (arr.length > 150) arr.shift();
+      } else {
+        // Large gap = market was closed — just refresh the last close price,
+        // do NOT create a fake "now" candle that would fool the client into
+        // thinking the data is live.
+        last.c = price;
+      }
     }
   }
 
