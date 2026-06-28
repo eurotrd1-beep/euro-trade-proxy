@@ -611,6 +611,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── PUT /api/pairs/:docId — update a pair (uses Admin SDK, bypasses Firestore rules) ──
+  if (url.pathname.startsWith('/api/pairs/') && req.method === 'PUT') {
+    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    const docId = url.pathname.replace('/api/pairs/', '').trim();
+    if (!docId) { json({ error: 'docId required' }, 400); return; }
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      try {
+        const { symbol, chartSymbol, category, type } = JSON.parse(body || '{}');
+        const updates = {};
+        if (symbol) updates.symbol = symbol;
+        if (chartSymbol) updates.chartSymbol = chartSymbol;
+        if (category) updates.category = category;
+        if (type) updates.type = type;
+        await db.collection('pairs').doc(docId).update(updates);
+        json({ ok: true });
+      } catch (e) { json({ error: e.message }, 500); }
+    });
+    return;
+  }
+
   // ── DELETE /api/pairs/:docId — remove a pair ─────────────────────────────
   if (url.pathname.startsWith('/api/pairs/') && req.method === 'DELETE') {
     if (!db) { json({ error: 'Firestore not available' }, 503); return; }
