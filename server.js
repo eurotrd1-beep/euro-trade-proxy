@@ -581,7 +581,6 @@ const server = http.createServer(async (req, res) => {
             'Referer':         'https://www.tradingview.com/',
             'Accept':          'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
             'Cache-Control':   'no-cache',
             'Pragma':          'no-cache',
           },
