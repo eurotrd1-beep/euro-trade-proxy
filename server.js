@@ -574,22 +574,32 @@ const server = http.createServer(async (req, res) => {
           path:     `/${market}/scan`,
           method:   'POST',
           headers: {
-            'Content-Type':   'application/json',
-            'Content-Length': Buffer.byteLength(scanBody),
-            'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Origin':         'https://www.tradingview.com',
-            'Referer':        'https://www.tradingview.com/',
+            'Content-Type':    'application/json',
+            'Content-Length':  Buffer.byteLength(scanBody),
+            'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Origin':          'https://www.tradingview.com',
+            'Referer':         'https://www.tradingview.com/',
+            'Accept':          'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Cache-Control':   'no-cache',
+            'Pragma':          'no-cache',
           },
         };
         const tvReq = https.request(options, (tvRes) => {
-          let data = '';
-          tvRes.on('data', c => { data += c; });
+          let chunks = [];
+          tvRes.on('data', c => chunks.push(c));
           tvRes.on('end', () => {
+            const raw = Buffer.concat(chunks);
             res.writeHead(tvRes.statusCode, { 'Content-Type': 'application/json' });
-            res.end(data);
+            res.end(raw);
           });
         });
-        tvReq.on('error', e => json({ error: e.message }, 500));
+        tvReq.setTimeout(25000, () => {
+          tvReq.destroy();
+          json({ error: 'TradingView timeout' }, 504);
+        });
+        tvReq.on('error', e => { try { json({ error: e.message }, 500); } catch(_) {} });
         tvReq.write(scanBody);
         tvReq.end();
       } catch (e) { json({ error: e.message }, 500); }
