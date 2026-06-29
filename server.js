@@ -160,22 +160,24 @@ class TVClient {
 
   // ── Persistence ──────────────────────────────────────────────────────────────
 
-  _loadAll() {
-    // Load from disk first (fast, synchronous) as immediate baseline
+  async _loadAll() {
+    // Hydrate candle history from Supabase so the chart has data instantly,
+    // even right after a cold start / redeploy (Render disk is ephemeral).
+    if (!db) return;
     try {
-      const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json'));
-      for (const file of files) {
-        try {
-          const raw  = fs.readFileSync(path.join(DATA_DIR, file), 'utf8');
-          const data = JSON.parse(raw);
-          if (data.key && Array.isArray(data.candles) && data.candles.length) {
-            this.candles[data.key] = data.candles;
-            console.log(`[disk] loaded ${data.candles.length} candles for ${data.key}`);
-          }
-        } catch (_) {}
+      const { data, error } = await db.from('candles').select('key, data');
+      if (error) { console.error('[Supabase] hydrate error:', error.message); return; }
+      let n = 0;
+      for (const row of (data || [])) {
+        if (row.key && Array.isArray(row.data) && row.data.length) {
+          this.candles[row.key] = row.data;
+          n++;
+        }
       }
-    } catch (_) {}
-
+      console.log(`[Supabase] hydrated ${n} candle series`);
+    } catch (e) {
+      console.error('[Supabase] hydrate failed:', e.message);
+    }
   }
 
   _schedSave(key) {
@@ -189,8 +191,14 @@ class TVClient {
 
   _saveCandles(key) {
     const candles = this.candles[key];
-    if (!candles || !candles.length) return;
-    try { fs.writeFileSync(keyToFile(key), JSON.stringify({ key, candles })); } catch (_) {}
+    if (!db || !candles || !candles.length) return;
+    // Store the already-trimmed (<=150) array as one JSON row per key.
+    // Pruning to 150 is therefore automatic. Called only when a candle CLOSES
+    // (debounced), never per-tick — keeps write volume low.
+    db.from('candles')
+      .upsert({ key, data: candles, updated_at: new Date().toISOString() })
+      .then(({ error }) => { if (error) console.error('[Supabase] save', key, error.message); })
+      .catch(e => console.error('[Supabase] save', key, e.message));
   }
 
   _saveAll() {
@@ -374,6 +382,9 @@ class TVClient {
         // Continuous market (small gap) — open new candle
         arr.push({ t: cTime, o: price, h: price, l: price, c: price });
         if (arr.length > 150) arr.shift();
+        // A candle just closed → persist (debounced). Covers symbols that
+        // advance via quote ticks rather than incremental bar updates.
+        this._schedSave(key);
       } else {
         // Large gap = market was closed — just refresh the last close price,
         // do NOT create a fake "now" candle that would fool the client into
@@ -439,8 +450,8 @@ class TVClient {
 
 const tv = new TVClient();
 
-// Save all candles to disk every 60 s
-setInterval(() => tv._saveAll(), 60_000);
+// Candles are persisted to Supabase on each candle close (debounced, via
+// _schedSave) — no periodic flush needed, which keeps write volume minimal.
 
 // ── Subscribe to pairs managed by admin (Supabase real-time) ─────────────────
 async function startPairsListener() {
@@ -648,10 +659,14 @@ server.listen(PORT, () => {
   console.log(`Proxy ready on http://localhost:${PORT}`);
   console.log('TV WebSocket connecting…');
 
-  // Keep-alive: ping self every 5 min so Render free tier never sleeps
+  // Keep-alive: ping self every 10 min so Render free tier never sleeps
+  // (idle spin-down is ~15 min). Uses https.get (always available) instead of
+  // fetch (undefined on older Node). RENDER_EXTERNAL_URL is provided by Render.
+  const SELF_URL = (process.env.RENDER_EXTERNAL_URL || 'https://euro-trade-proxy.onrender.com').replace(/\/$/, '');
   setInterval(() => {
-    fetch('https://euro-trade-proxy.onrender.com/health')
-      .catch(() => {});
-  }, 5 * 60 * 1000);
+    try {
+      https.get(SELF_URL + '/health', r => r.resume()).on('error', () => {});
+    } catch (_) {}
+  }, 10 * 60 * 1000);
 
 });
