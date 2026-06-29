@@ -340,11 +340,18 @@ class TVClient {
     const MAX = 150;
 
     if (full) {
-      const all = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
-      // Keep only the last MAX candles
-      this.candles[key] = all.length > MAX ? all.slice(all.length - MAX) : all;
-      console.log(`[TV] ${key}: loaded ${this.candles[key].length} candles`);
-      this._saveCandles(key);
+      const all     = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
+      const trimmed = all.length > MAX ? all.slice(all.length - MAX) : all;
+      const existing = this.candles[key] || [];
+      // TradingView serves little/no intraday history for unauthorized sessions
+      // (e.g. 1 bar for 1m). Don't let a tiny full-load wipe the candles we've
+      // built live from real per-second prices. Only adopt TV's history when it
+      // has at least as many candles as we already hold (true for 1h/1D).
+      if (trimmed.length >= existing.length) {
+        this.candles[key] = trimmed;
+        console.log(`[TV] ${key}: loaded ${trimmed.length} candles`);
+        this._saveCandles(key);
+      }
     } else {
       if (!this.candles[key]) return;
       let newCandle = false;
@@ -366,34 +373,34 @@ class TVClient {
     }
   }
 
+  // Build the live candle from the REAL price (per-second scraping):
+  //   open  = first price in the frame
+  //   high  = highest price reached in the frame
+  //   low   = lowest price reached in the frame
+  //   close = latest price
+  // The frame is derived purely from the clock (1m=60s, 5m=300s, … 1D=86400s),
+  // so a new candle opens exactly at each boundary. Driven by real ticks +
+  // a 1-second sampler — no math/simulation, matches the platform.
   _tickCandle(tvSym, iv, price) {
-    const key = `${tvSym}_${iv}`;
-    const arr = this.candles[key];
-    if (!arr || !arr.length) return;
+    if (price == null || !isFinite(price) || price <= 0) return;
+    const key   = `${tvSym}_${iv}`;
+    let   arr   = this.candles[key];
+    if (!arr) arr = this.candles[key] = [];
     const ivSec = ivToSeconds(iv);
     const now   = Math.floor(Date.now() / 1000);
-    const cTime = Math.floor(now / ivSec) * ivSec;
-    const last  = arr[arr.length - 1];
-    if (cTime === last.t) {
-      // Same candle — update OHLC
+    const cTime = Math.floor(now / ivSec) * ivSec;   // start of current frame
+    const last  = arr.length ? arr[arr.length - 1] : null;
+
+    if (!last || cTime > last.t) {
+      // New frame → open a fresh candle at the real live price.
+      arr.push({ t: cTime, o: price, h: price, l: price, c: price });
+      if (arr.length > 150) arr.shift();   // keep last 150, drop oldest
+      this._schedSave(key);                // persist the just-closed candle
+    } else if (cTime === last.t) {
+      // Same frame → update high / low / close from the real price.
       if (price > last.h) last.h = price;
       if (price < last.l) last.l = price;
       last.c = price;
-    } else if (cTime > last.t) {
-      const gapCandles = (cTime - last.t) / ivSec;
-      if (gapCandles <= 3) {
-        // Continuous market (small gap) — open new candle
-        arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-        if (arr.length > 150) arr.shift();
-        // A candle just closed → persist (debounced). Covers symbols that
-        // advance via quote ticks rather than incremental bar updates.
-        this._schedSave(key);
-      } else {
-        // Large gap = market was closed — just refresh the last close price,
-        // do NOT create a fake "now" candle that would fool the client into
-        // thinking the data is live.
-        last.c = price;
-      }
     }
   }
 
@@ -452,6 +459,22 @@ class TVClient {
 }
 
 const tv = new TVClient();
+
+// ── Per-second scraping ───────────────────────────────────────────────────────
+// Every second, stamp the latest REAL price onto the current candle of every
+// subscribed (symbol, timeframe). Guarantees the forming candle keeps updating
+// and a new candle opens exactly at each frame boundary (1m/5m/15m/1h/1D),
+// even between TradingView ticks. Candles are built from real prices only.
+setInterval(() => {
+  for (const key of Object.keys(tv.candles)) {
+    const us = key.lastIndexOf('_');
+    if (us < 0) continue;
+    const tvSym = key.slice(0, us);
+    const iv    = key.slice(us + 1);
+    const price = tv.prices[tvSym];
+    if (price != null) tv._tickCandle(tvSym, iv, price);
+  }
+}, 1000);
 
 // Candles are persisted to Supabase on each candle close (debounced, via
 // _schedSave) — no periodic flush needed, which keeps write volume minimal.
