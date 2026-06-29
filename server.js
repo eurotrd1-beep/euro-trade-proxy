@@ -26,8 +26,26 @@ try {
 // ── Browser WebSocket clients ─────────────────────────────────────────────────
 const wss       = new WebSocketServer({ noServer: true });
 const clientMap = new Map(); // ws → Set<tvSym>
+const ipConns   = new Map(); // ip → Set<ws>  (cap connections/tabs per user)
+const MAX_CONNS_PER_IP = 4;
 
-wss.on('connection', (ws) => {
+function clientIp(req) {
+  const xff = (req && req.headers && (req.headers['x-forwarded-for'] || '')).split(',')[0].trim();
+  return xff || (req && req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+wss.on('connection', (ws, req) => {
+  const ip = clientIp(req);
+  let set = ipConns.get(ip);
+  if (!set) { set = new Set(); ipConns.set(ip, set); }
+  // Per-IP cap: a new tab closes the OLDEST connection so the newest always works.
+  while (set.size >= MAX_CONNS_PER_IP) {
+    const oldest = set.values().next().value;
+    set.delete(oldest);
+    try { oldest.close(4001, 'too many connections'); } catch (_) {}
+  }
+  set.add(ws);
+
   clientMap.set(ws, new Set());
   ws.on('message', (data) => {
     try {
@@ -38,8 +56,13 @@ wss.on('connection', (ws) => {
       if (msg.unsub) subs.delete(msg.unsub);
     } catch (_) {}
   });
-  ws.on('close', () => clientMap.delete(ws));
-  ws.on('error', () => clientMap.delete(ws));
+  const cleanup = () => {
+    clientMap.delete(ws);
+    const s = ipConns.get(ip);
+    if (s) { s.delete(ws); if (!s.size) ipConns.delete(ip); }
+  };
+  ws.on('close', cleanup);
+  ws.on('error', cleanup);
 });
 
 function broadcastPrice(tvSym, price) {
@@ -688,7 +711,7 @@ const server = http.createServer(async (req, res) => {
 
 server.on('upgrade', (req, socket, head) => {
   if (new URL(req.url, 'http://x').pathname === '/ws') {
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   } else {
     socket.destroy();
   }
