@@ -6,20 +6,20 @@ const fs    = require('fs');
 const path  = require('path');
 const { WebSocket, WebSocketServer } = require('ws');
 
-// ── Firebase Admin (Firestore persistence) ────────────────────────────────────
+// ── Supabase (pairs listener) ─────────────────────────────────────────────────
 let db = null;
 try {
-  const admin = require('firebase-admin');
-  const raw   = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (raw) {
-    admin.initializeApp({ credential: admin.credential.cert(JSON.parse(raw)) });
-    db = admin.firestore();
-    console.log('[Firestore] initialized');
+  const { createClient } = require('@supabase/supabase-js');
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_KEY;
+  if (url && key) {
+    db = createClient(url, key);
+    console.log('[Supabase] initialized');
   } else {
-    console.warn('[Firestore] FIREBASE_SERVICE_ACCOUNT not set — using disk only');
+    console.warn('[Supabase] SUPABASE_URL / SUPABASE_SERVICE_KEY not set — pairs listener disabled');
   }
 } catch (e) {
-  console.error('[Firestore] init failed:', e.message, '— using disk only');
+  console.error('[Supabase] init failed:', e.message);
 }
 
 
@@ -442,18 +442,35 @@ const tv = new TVClient();
 // Save all candles to disk every 60 s
 setInterval(() => tv._saveAll(), 60_000);
 
-// ── Subscribe to pairs managed by admin (Firestore real-time) ────────────────
-function startPairsListener() {
+// ── Subscribe to pairs managed by admin (Supabase real-time) ─────────────────
+async function startPairsListener() {
   if (!db) return;
-  db.collection('pairs').onSnapshot((snapshot) => {
-    snapshot.docs.forEach(doc => {
-      const chartSymbol = (doc.data().chartSymbol || '').trim();
+  // Initial load
+  try {
+    const { data, error } = await db.from('pairs').select('chart_symbol');
+    if (!error && data) {
+      data.forEach(row => {
+        const chartSymbol = (row.chart_symbol || '').trim();
+        if (chartSymbol && chartSymbol.includes(':')) {
+          AUTO_IVS.forEach(iv => tv.subscribe(chartSymbol, iv));
+          console.log('[Pairs] subscribed (init):', chartSymbol);
+        }
+      });
+    }
+  } catch (e) { console.error('[Pairs] init error:', e.message); }
+
+  // Real-time inserts
+  db.channel('pairs-inserts')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pairs' }, payload => {
+      const chartSymbol = (payload.new.chart_symbol || '').trim();
       if (chartSymbol && chartSymbol.includes(':')) {
         AUTO_IVS.forEach(iv => tv.subscribe(chartSymbol, iv));
-        console.log('[Pairs] subscribed:', chartSymbol);
+        console.log('[Pairs] subscribed (new):', chartSymbol);
       }
+    })
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED') console.log('[Pairs] realtime channel active');
     });
-  }, err => console.error('[Pairs] listener error:', err.message));
 }
 startPairsListener();
 
@@ -507,22 +524,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── POST /api/pairs — add a pair (uses Admin SDK, bypasses Firestore rules) ──
+  // ── POST /api/pairs — add a pair ────────────────────────────────────────────
   if (url.pathname === '/api/pairs' && req.method === 'POST') {
-    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', async () => {
       try {
         const { symbol, chartSymbol, category, type, order } = JSON.parse(body || '{}');
         if (!symbol || !chartSymbol) { json({ error: 'symbol and chartSymbol required' }, 400); return; }
-        const ref = await db.collection('pairs').add({
-          symbol, chartSymbol,
+        const { data, error } = await db.from('pairs').insert({
+          symbol, chart_symbol: chartSymbol,
           category: category || 'forex',
           type:     type     || category || 'forex',
           order:    order    || Date.now(),
-        });
-        json({ id: ref.id });
+        }).select('id').single();
+        if (error) throw error;
+        json({ id: data.id });
       } catch (e) { json({ error: e.message }, 500); }
     });
     return;
@@ -578,9 +596,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── PUT /api/pairs/:docId — update a pair (uses Admin SDK, bypasses Firestore rules) ──
+  // ── PUT /api/pairs/:docId — update a pair ───────────────────────────────────
   if (url.pathname.startsWith('/api/pairs/') && req.method === 'PUT') {
-    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
     const docId = url.pathname.replace('/api/pairs/', '').trim();
     if (!docId) { json({ error: 'docId required' }, 400); return; }
     let body = '';
@@ -590,10 +608,11 @@ const server = http.createServer(async (req, res) => {
         const { symbol, chartSymbol, category, type } = JSON.parse(body || '{}');
         const updates = {};
         if (symbol) updates.symbol = symbol;
-        if (chartSymbol) updates.chartSymbol = chartSymbol;
+        if (chartSymbol) updates.chart_symbol = chartSymbol;
         if (category) updates.category = category;
         if (type) updates.type = type;
-        await db.collection('pairs').doc(docId).update(updates);
+        const { error } = await db.from('pairs').update(updates).eq('id', docId);
+        if (error) throw error;
         json({ ok: true });
       } catch (e) { json({ error: e.message }, 500); }
     });
@@ -602,11 +621,12 @@ const server = http.createServer(async (req, res) => {
 
   // ── DELETE /api/pairs/:docId — remove a pair ─────────────────────────────
   if (url.pathname.startsWith('/api/pairs/') && req.method === 'DELETE') {
-    if (!db) { json({ error: 'Firestore not available' }, 503); return; }
+    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
     const docId = url.pathname.replace('/api/pairs/', '').trim();
     if (!docId) { json({ error: 'docId required' }, 400); return; }
     try {
-      await db.collection('pairs').doc(docId).delete();
+      const { error } = await db.from('pairs').delete().eq('id', docId);
+      if (error) throw error;
       json({ ok: true });
     } catch (e) { json({ error: e.message }, 500); }
     return;
