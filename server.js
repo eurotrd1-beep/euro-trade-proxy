@@ -66,8 +66,17 @@ wss.on('connection', (ws, req) => {
 });
 
 function broadcastPrice(tvSym, price) {
+  // The chart subscribes with the BARE symbol (e.g. "EURUSD") while we broadcast
+  // the full prefixed symbol (e.g. "OANDA:EURUSD"). Match on the bare form so the
+  // live price actually reaches the client (otherwise the chart freezes).
+  const bare = bareSymbol(tvSym);
   for (const [ws, subs] of clientMap) {
-    if (subs.has(tvSym) && ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    let match = subs.has(tvSym);
+    if (!match) {
+      for (const s of subs) { if (bareSymbol(s) === bare) { match = true; break; } }
+    }
+    if (match) {
       try { ws.send(JSON.stringify({ sym: tvSym, price })); } catch (_) {}
     }
   }
