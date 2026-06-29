@@ -241,8 +241,11 @@ class TVClient {
       Object.entries(this.symQS).forEach(([tvSym, qs]) => {
         this._doSubscribeQuote(tvSym, qs);
       });
-      // Auto-subscribe all tracked symbols on startup / reconnect
-      this._autoSubscribe();
+      // NOTE: We intentionally do NOT auto-subscribe the big hardcoded
+      // AUTO_SYMBOLS list — subscribing 200+ series on one socket makes
+      // TradingView drop the connection (flapping → stale data). We only
+      // track the pairs the admin actually added (see startPairsListener),
+      // which keeps the series count low and the TV connection stable/live.
     });
 
     this.ws.on('message', data => this._onMsg(data.toString()));
