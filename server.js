@@ -22,30 +22,6 @@ try {
   console.error('[Firestore] init failed:', e.message, '— using disk only');
 }
 
-// Sanitize key for Firestore doc ID (no colons or slashes)
-function fsDocId(key) { return key.replace(/[:/]/g, '_'); }
-
-async function fsLoad(key) {
-  if (!db) return null;
-  try {
-    const snap = await db.collection('tv_cache').doc(fsDocId(key)).get();
-    if (snap.exists) {
-      const data = snap.data();
-      if (Array.isArray(data.candles) && data.candles.length) return data.candles;
-    }
-  } catch (e) { console.error('[Firestore] load error:', key, e.message); }
-  return null;
-}
-
-async function fsSave(key, candles) {
-  if (!db || !candles || !candles.length) return;
-  try {
-    await db.collection('tv_cache').doc(fsDocId(key)).set(
-      { candles, updated: Date.now() },
-      { merge: false }
-    );
-  } catch (e) { console.error('[Firestore] save error:', key, e.message); }
-}
 
 // ── Browser WebSocket clients ─────────────────────────────────────────────────
 const wss       = new WebSocketServer({ noServer: true });
@@ -200,27 +176,6 @@ class TVClient {
       }
     } catch (_) {}
 
-    // Then hydrate from Firestore for all AUTO_SYMBOLS (overrides disk with fresher data)
-    if (db) {
-      const self = this;
-      const keys = [];
-      AUTO_SYMBOLS.forEach(sym => AUTO_IVS.forEach(iv => keys.push(`${sym}_${iv}`)));
-      let loaded = 0;
-      keys.forEach(key => {
-        fsLoad(key).then(candles => {
-          if (candles) {
-            const disk = self.candles[key];
-            // Use Firestore data if it has more candles or fresher last candle
-            if (!disk || candles.length >= disk.length) {
-              self.candles[key] = candles;
-              console.log(`[Firestore] hydrated ${candles.length} candles for ${key}`);
-            }
-          }
-          loaded++;
-          if (loaded === keys.length) console.log('[Firestore] hydration complete');
-        });
-      });
-    }
   }
 
   _schedSave(key) {
@@ -235,10 +190,7 @@ class TVClient {
   _saveCandles(key) {
     const candles = this.candles[key];
     if (!candles || !candles.length) return;
-    // Disk (sync, fast fallback)
     try { fs.writeFileSync(keyToFile(key), JSON.stringify({ key, candles })); } catch (_) {}
-    // Firestore (async, persistent across restarts)
-    fsSave(key, candles);
   }
 
   _saveAll() {
@@ -487,8 +439,23 @@ class TVClient {
 
 const tv = new TVClient();
 
-// Save all candles to disk every 60 s, regardless of user activity
+// Save all candles to disk every 60 s
 setInterval(() => tv._saveAll(), 60_000);
+
+// ── Subscribe to pairs managed by admin (Firestore real-time) ────────────────
+function startPairsListener() {
+  if (!db) return;
+  db.collection('pairs').onSnapshot((snapshot) => {
+    snapshot.docs.forEach(doc => {
+      const chartSymbol = (doc.data().chartSymbol || '').trim();
+      if (chartSymbol && chartSymbol.includes(':')) {
+        AUTO_IVS.forEach(iv => tv.subscribe(chartSymbol, iv));
+        console.log('[Pairs] subscribed:', chartSymbol);
+      }
+    });
+  }, err => console.error('[Pairs] listener error:', err.message));
+}
+startPairsListener();
 
 
 
