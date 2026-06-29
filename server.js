@@ -414,9 +414,13 @@ class TVClient {
   //   high  = highest price reached in the frame
   //   low   = lowest price reached in the frame
   //   close = latest price
-  // The frame is derived purely from the clock (1m=60s, 5m=300s, … 1D=86400s),
-  // so a new candle opens exactly at each boundary. Driven by real ticks +
-  // a 1-second sampler — no math/simulation, matches the platform.
+  //
+  // A NEW candle opens only when BOTH conditions hold together:
+  //   1) the frame's clock time has elapsed (1m=60s, 5m=300s, … 1D=86400s), AND
+  //   2) the price actually CHANGED vs the last candle's close.
+  // If the frame elapsed but the price is frozen (no movement / market still),
+  // we do NOT open a flat candle — we wait until the price moves, then open the
+  // new candle stamped at the correct (current) frame time.
   _tickCandle(tvSym, iv, price) {
     if (price == null || !isFinite(price) || price <= 0) return;
     const key   = `${tvSym}_${iv}`;
@@ -427,16 +431,28 @@ class TVClient {
     const cTime = Math.floor(now / ivSec) * ivSec;   // start of current frame
     const last  = arr.length ? arr[arr.length - 1] : null;
 
-    if (!last || cTime > last.t) {
-      // New frame → open a fresh candle at the real live price.
+    if (!last) {
+      // Very first candle for this series.
       arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-      if (arr.length > 150) arr.shift();   // keep last 150, drop oldest
-      this._schedSave(key);                // persist the just-closed candle
-    } else if (cTime === last.t) {
+      this._schedSave(key);
+      return;
+    }
+
+    if (cTime === last.t) {
       // Same frame → update high / low / close from the real price.
       if (price > last.h) last.h = price;
       if (price < last.l) last.l = price;
       last.c = price;
+      return;
+    }
+
+    // cTime > last.t : the frame has rolled over.
+    // Open a new candle ONLY if the price has changed vs the last close.
+    // (Frozen price across the boundary ⇒ hold, no flat candle.)
+    if (price !== last.c) {
+      arr.push({ t: cTime, o: price, h: price, l: price, c: price });
+      if (arr.length > 150) arr.shift();   // keep last 150, drop oldest
+      this._schedSave(key);                // persist the just-closed candle
     }
   }
 
