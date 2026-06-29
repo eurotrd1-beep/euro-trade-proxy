@@ -133,7 +133,7 @@ const AUTO_SYMBOLS = [
   'BINANCE:TRXUSDT','BINANCE:LTCUSDT','BINANCE:TONUSDT',
   'BINANCE:DASHUSDT','BINANCE:BCHUSDT',
 ];
-const AUTO_IVS = ['1m', '5m', '15m', '1h'];
+const AUTO_IVS = ['1m', '5m', '15m', '1h', '1D'];
 
 // ── TradingView WebSocket Client ──────────────────────────────────────────────
 
