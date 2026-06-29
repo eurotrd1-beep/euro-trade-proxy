@@ -145,6 +145,7 @@ class TVClient {
     // Data caches
     this.prices      = {};  // tvSym → number
     this.candles     = {};  // `${tvSym}_${iv}` → Candle[]
+    this.lastChange  = {};  // tvSym → ms timestamp of last price CHANGE (market-open detection)
 
     // Session registries
     this.cSess       = {};  // csId → {tvSym, iv}
@@ -300,6 +301,9 @@ class TVClient {
         const tvSym = data.n;
         const lp    = data.v && data.v.lp;
         if (tvSym && lp != null) {
+          // Track the last time the price actually CHANGED — used to detect a
+          // closed/frozen market (TradingView stops sending fresh prices).
+          if (this.prices[tvSym] !== lp) this.lastChange[tvSym] = Date.now();
           this.prices[tvSym] = lp;
           broadcastPrice(tvSym, lp);
           // Update last candle across all intervals
@@ -456,6 +460,14 @@ class TVClient {
   }
 
   isConnected() { return this.ready; }
+
+  // Market is "open" if the price changed within the last 90 s. A frozen price
+  // (weekend, TradingView block, off-hours) => closed.
+  isMarketOpen(tvSym) {
+    const lc = this.lastChange[tvSym];
+    if (!lc) return false;
+    return (Date.now() - lc) < 90_000;
+  }
 }
 
 const tv = new TVClient();
@@ -540,8 +552,9 @@ const server = http.createServer(async (req, res) => {
     // Return whatever we have — even stale cache is better than nothing
     // chart.js will update via WebSocket tick once live data arrives
     json({
-      status:    candles.length ? 'ok' : 'loading',
-      connected: tv.isConnected(),
+      status:     candles.length ? 'ok' : 'loading',
+      connected:  tv.isConnected(),
+      marketOpen: tv.isMarketOpen(tvSym),
       candles,
     });
     return;
@@ -551,7 +564,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/tv/tick') {
     const raw   = url.searchParams.get('symbol') || 'OANDA:EURUSD';
     const tvSym = normalizeSymbol(raw);
-    json({ price: tv.getPrice(tvSym), connected: tv.isConnected() });
+    json({ price: tv.getPrice(tvSym), connected: tv.isConnected(), marketOpen: tv.isMarketOpen(tvSym) });
     return;
   }
 
