@@ -11,7 +11,7 @@
 #   • Env vars:     PO_EMAIL, PO_PASSWORD, PO_CHART_URL,
 #                   SUPABASE_URL, SUPABASE_SERVICE_KEY
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:20-slim
+FROM node:22-slim
 
 # Shared libraries needed by @sparticuz/chromium's bundled Chromium. The binary
 # itself ships inside the npm package (brotli-compressed, extracted to /tmp at
