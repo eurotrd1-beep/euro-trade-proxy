@@ -338,13 +338,14 @@ class TVClient {
           if (this.prices[tvSym] !== lp) this.lastChange[tvSym] = Date.now();
           this.prices[tvSym] = lp;
           broadcastPrice(tvSym, lp);
-          // Update last candle across all intervals
-          Object.keys(this.candles).forEach(key => {
-            if (key.startsWith(tvSym + '_')) {
-              const iv = key.slice(tvSym.length + 1);
-              this._tickCandle(tvSym, iv, lp);
-            }
-          });
+          // Update only THIS symbol's candle series — one direct lookup per known
+          // interval instead of scanning the WHOLE candle store on every quote of
+          // every tracked symbol. Frees the event loop so prices broadcast with
+          // minimal delay (the previous full scan lagged ticks on a free CPU).
+          for (let i = 0; i < AUTO_IVS.length; i++) {
+            const iv = AUTO_IVS[i];
+            if (this.candles[tvSym + '_' + iv]) this._tickCandle(tvSym, iv, lp);
+          }
         }
         break;
       }
