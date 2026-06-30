@@ -1,5 +1,13 @@
 'use strict';
 
+// supabase-js Realtime needs a global WebSocket; Node < 22 has none (throws
+// "Node.js 20 detected without native WebSocket support"). Provide `ws` as the
+// global before the supabase client is created. Guarded + no-op on Node 22+.
+// (Also set in start.js for server.js's benefit; here too for standalone runs.)
+if (typeof globalThis.WebSocket === 'undefined') {
+  try { globalThis.WebSocket = require('ws'); } catch (_) {}
+}
+
 /**
  * ════════════════════════════════════════════════════════════════════════════
  *  OTC SCRAPER  —  Pocket Option (persistent browser session)

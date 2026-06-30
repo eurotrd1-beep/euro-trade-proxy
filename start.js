@@ -11,6 +11,15 @@
  * each module owns its own error handling and lifecycle.
  */
 
+// ── WebSocket polyfill (MUST run before any require) ──────────────────────────
+// supabase-js Realtime needs a global WebSocket. Node < 22 has none, so realtime
+// channels throw ("Node.js 20 detected without native WebSocket support"). Expose
+// the `ws` package (already a dependency) as the global WebSocket so BOTH scrapers'
+// realtime subscriptions work on Node 20. No-op on Node 22+ (native WebSocket).
+if (typeof globalThis.WebSocket === 'undefined') {
+  try { globalThis.WebSocket = require('ws'); } catch (_) {}
+}
+
 // TradingView scraper (starts its HTTP/WS server on require).
 require('./server.js');
 
