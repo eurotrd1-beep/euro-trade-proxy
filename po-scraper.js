@@ -1,102 +1,77 @@
 'use strict';
 
-// supabase-js Realtime needs a global WebSocket; Node < 22 has none (throws
-// "Node.js 20 detected without native WebSocket support"). Provide `ws` as the
-// global before the supabase client is created. Guarded + no-op on Node 22+.
-// (Also set in start.js for server.js's benefit; here too for standalone runs.)
+// supabase-js Realtime needs a global WebSocket; Node < 22 has none. Provide
+// `ws` as the global before any supabase client is created. No-op on Node 22+.
 if (typeof globalThis.WebSocket === 'undefined') {
   try { globalThis.WebSocket = require('ws'); } catch (_) {}
 }
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
- *  OTC SCRAPER  —  Pocket Option (persistent browser session)
+ *  OTC SCRAPER  —  Pocket Option (DIRECT WebSocket, no browser)
  * ════════════════════════════════════════════════════════════════════════════
  *
- *  Fully independent from the TradingView scraper (server.js). This module:
- *    1. Opens ONE persistent Chrome (Puppeteer) on boot, logs in to Pocket
- *       Option with PO_EMAIL / PO_PASSWORD, opens PO_CHART_URL, and keeps the
- *       browser/page ALIVE the whole time (it is never closed per read).
- *    2. Reads the live price every second from that same open page (it taps the
- *       page's own websocket feed — no per-read tab, no cookie dependency).
- *    3. Builds candles for every timeframe (1m,5m,15m,1h,1D) from the real
- *       per-second price, opening a new candle only when the frame elapsed AND
- *       the price changed (frozen market => the current candle stays open).
- *    4. Persists the last 150 candles per (symbol+timeframe) to Supabase
- *       (`candles` table, FIFO) and the latest per-second price to
- *       configs/otc_prices — never to local disk.
- *    5. Health-checks the session every minute and auto-relogins on
- *       Target-closed/detached, logging every reconnect; after 3 consecutive
- *       login failures it logs a clear admin alert (without stopping the rest).
- *    6. Discovers tradable OTC pairs on demand (admin "جلب الأزواج" → configs/
- *       otc_scan) and upserts them into the `otc_pairs` library (enabled=off).
- *    7. Only scrapes/stores the pairs the admin ENABLED in the library.
+ *  Same idea as the TradingView scraper: connect straight to the platform's
+ *  websocket and read prices — NO Chromium, so it runs comfortably on Render's
+ *  512 MB plan (~20 MB instead of ~450 MB) and is far more stable (no browser
+ *  crashes, no DOM selectors).
  *
- *  Extensibility: all platform-specific behaviour lives behind a small
- *  `PlatformAdapter` interface, so adding another OTC platform later is just a
- *  new adapter — the engine (session manager, candle builder, storage) is
- *  platform-agnostic.
+ *  Pocket Option's feed is protected, so unlike TradingView it needs a one-time
+ *  session token captured from a real login. Capture it locally with
+ *  `get-po-ssid.js`, then set on Render:
+ *     PO_WS_URL  — the websocket URL PO uses
+ *     PO_AUTH    — the auth handshake frame (e.g. ["auth",{...}])  (session token)
+ *  Shared with the TradingView side: SUPABASE_URL, SUPABASE_SERVICE_KEY.
  *
- *  Credentials & connection come ONLY from env vars (set on Render):
- *    PO_EMAIL, PO_PASSWORD, PO_CHART_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY
+ *  Everything platform-specific lives in `PoProtocol` (frame parsing / symbols)
+ *  so another OTC platform later is just a new protocol object.
  * ════════════════════════════════════════════════════════════════════════════
  */
 
-// ── Dependencies ─────────────────────────────────────────────────────────────
-// To keep RAM low enough for Render Free (512 MB) we use puppeteer-core +
-// @sparticuz/chromium (a minimal, resource-friendly Chromium build) instead of
-// full puppeteer. puppeteer-extra's stealth plugin is layered on top of
-// puppeteer-core so the headless session still evades PO's bot detection.
-let puppeteer = null;
-let chromium  = null;
-try {
-  chromium = require('@sparticuz/chromium');
-  const core = require('puppeteer-core');
-  try {
-    const { addExtra } = require('puppeteer-extra');
-    const Stealth = require('puppeteer-extra-plugin-stealth');
-    puppeteer = addExtra(core);
-    puppeteer.use(Stealth());
-  } catch (_) {
-    puppeteer = core; // stealth optional
-  }
-} catch (_) {
-  // Local-dev fallback: full puppeteer if @sparticuz/chromium isn't installed.
-  try {
-    puppeteer = require('puppeteer-extra');
-    puppeteer.use(require('puppeteer-extra-plugin-stealth')());
-  } catch (_) {
-    try { puppeteer = require('puppeteer'); } catch (_) {}
-  }
-}
-
-// Resource types blocked at the network layer to slash RAM/CPU: we only let the
-// HTML document, JavaScript and the data sockets (xhr/fetch/websocket) through —
-// everything heavy (images, media, fonts, stylesheets) is aborted. The live
-// price is read from the websocket feed, so none of the blocked assets matter.
-const BLOCKED_RESOURCE_TYPES = new Set([
-  'image', 'media', 'font', 'stylesheet', 'texttrack', 'imageset',
-  'manifest', 'other', 'cspviolationreport', 'ping', 'prefetch',
-]);
-// Ad / tracker / analytics hosts — aborted regardless of resource type.
-const BLOCKED_URL_RE = /(googlesyndication|doubleclick|google-analytics|googletagmanager|facebook\.net|fbcdn|hotjar|mixpanel|amplitude|sentry|intercom|zopim|tawk\.to|criteo|taboola|outbrain|yandex|metrika|appsflyer|onesignal)/i;
-
+const WebSocketLib = require('ws');
 let createClient;
 try { ({ createClient } = require('@supabase/supabase-js')); } catch (_) {}
 
 // ── Config (env only) ────────────────────────────────────────────────────────
-const PO_EMAIL     = process.env.PO_EMAIL     || '';
-const PO_PASSWORD  = process.env.PO_PASSWORD  || '';
-const PO_CHART_URL = process.env.PO_CHART_URL || 'https://pocketoption.com/en/cabinet/demo-quick-high-low/';
+const PO_AUTH      = (process.env.PO_AUTH || process.env.PO_SSID || '').trim();
+const PO_WS_URL    = process.env.PO_WS_URL ||
+  'wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket';
+const PO_IS_DEMO   = (process.env.PO_IS_DEMO || '1') === '1';
+// Credentials enable AUTOMATIC token re-capture (a brief, temporary browser) if
+// the token ever dies despite the heartbeat. Optional — without them the system
+// falls back to a manual re-capture alert.
+const PO_EMAIL     = process.env.PO_EMAIL || '';
+const PO_PASSWORD  = process.env.PO_PASSWORD || '';
 const PO_LOGIN_URL = process.env.PO_LOGIN_URL || 'https://pocketoption.com/en/login/';
+
+// Active session token + ws url (start from env; replaced by auto-recapture and
+// persisted to Supabase so a restart reuses the freshest token).
+let activeAuth  = PO_AUTH;
+let activeWsUrl = PO_WS_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
+// ── Keep-alive tuning (override with the REAL frames captured by get-po-ssid.js) ──
+// PO_HEARTBEAT : JSON array of extra Engine.IO frames to send each beat, e.g.
+//                ["42[\"ps\"]"] — replays exactly what the real client sends.
+// PO_SUBSCRIBE : template to (re)subscribe to a symbol, {symbol} is substituted,
+//                e.g. 42["changeSymbol",{"asset":"{symbol}","period":60}]
+// PO_KEEPALIVE_URL + PO_COOKIE : optional 2nd channel — periodic HTTPS GET with
+//                the session cookie, so the session stays "active" via HTTP too.
+let PO_HEARTBEAT = [];
+try { if (process.env.PO_HEARTBEAT) PO_HEARTBEAT = JSON.parse(process.env.PO_HEARTBEAT); } catch (_) {}
+const PO_SUBSCRIBE     = process.env.PO_SUBSCRIBE || '';
+const PO_KEEPALIVE_URL = process.env.PO_KEEPALIVE_URL || '';
+const PO_COOKIE        = process.env.PO_COOKIE || '';
+const https = require('https');
+
+// Heartbeat cadence: RANDOM 20–40 s (not a fixed tick) to look human.
+function nextBeatMs() { return 20000 + Math.floor(Math.random() * 20000); }
+
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
 const MAX_CANDLES = 150;
-const HEALTH_MS   = 60_000;     // health check cadence
-const PRICE_MS    = 1_000;      // per-second price → candle tick
-const MAX_LOGIN_FAILS = 3;      // consecutive login failures before admin alert
+const PRICE_MS    = 1000;
+const MAX_LOGIN_FAILS = 3;
 
 const log  = (...a) => console.log('[OTC]', ...a);
 const warn = (...a) => console.warn('[OTC]', ...a);
@@ -111,177 +86,78 @@ if (createClient && SUPABASE_URL && SUPABASE_KEY) {
   warn('Supabase not configured — OTC scraper will run without persistence');
 }
 
-// ── Interval helpers (mirror the TV scraper's semantics) ─────────────────────
 function ivToSeconds(iv) {
   switch (iv) {
     case '5m':  return 300;
     case '15m': return 900;
     case '1h':  return 3600;
     case '1D':  return 86400;
-    default:    return 60; // 1m
+    default:    return 60;
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  Platform adapter interface (extensibility seam)
+//  Platform protocol (Pocket Option) — frame parsing + symbol helpers
 // ════════════════════════════════════════════════════════════════════════════
-//
-//  A platform adapter knows how to:
-//    • id            — short platform id (matches otc_pairs.platform)
-//    • loginUrl / chartUrl
-//    • isLoggedIn(page)         → boolean
-//    • login(page)             → performs credential login
-//    • parseFrame(payload)     → { prices?: {sym:price}, assets?: [{symbol,name}] }
-//                                parses ONE raw websocket frame from the page
-//    • normalize(rawSymbol)    → canonical internal symbol (NO ':' so the TV
-//                                scraper never picks it up)
-//    • displayName(symbol)     → human label, e.g. "EUR/USD OTC"
-//
-//  Everything else (session lifecycle, candle building, storage) is generic.
+const PoProtocol = {
+  id: 'pocketoption',
 
-class PocketOptionAdapter {
-  constructor() {
-    this.id       = 'pocketoption';
-    this.loginUrl = PO_LOGIN_URL;
-    this.chartUrl = PO_CHART_URL;
-  }
+  // Canonical internal symbol: upper-case, no ':' (so the TV scraper's pairs
+  // listener — which only subscribes chart_symbols containing ':' — ignores it).
+  normalize(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const s = raw.trim().replace(/[:\s]/g, '').toUpperCase();
+    return s || null;
+  },
 
-  async isLoggedIn(page) {
-    try {
-      const url = page.url() || '';
-      if (/\/login|sign-in|\/auth|\/registration/i.test(url)) return false;
-      // Logged-in cabinet pages expose a balance / cabinet / deposit element.
-      const bySelector = await page.evaluate(() => {
-        const sel = [
-          '.balance-info-block', '.js-balance-demo', '.balance__value',
-          '[data-test="balance"]', '.deposit-button', '.cabinet',
-          '.right-block__balance', '.balance', '.user-block', '.tour-balance',
-          '.js-hd-balance', '.deposit-block',
-        ];
-        return sel.some(s => document.querySelector(s));
-      }).catch(() => false);
-      if (bySelector) return true;
-      // Fallback: a cabinet/trade URL that isn't the login page ⇒ we have a
-      // session (covers selector drift on the chart page).
-      return /cabinet|quick-high-low|quick-fixed-time|trade|demo|profile/i.test(url);
-    } catch (_) { return false; }
-  }
+  displayName(symbol) {
+    const base = symbol.replace(/_?OTC$/i, '');
+    if (base.length === 6) return `${base.slice(0, 3)}/${base.slice(3)} OTC`;
+    return `${base} OTC`;
+  },
 
-  async login(page) {
-    if (!PO_EMAIL || !PO_PASSWORD) {
-      throw new Error('PO_EMAIL / PO_PASSWORD not set');
-    }
-    // 'domcontentloaded' — PO keeps live sockets open so 'networkidle2' never
-    // fires and would burn the full timeout. Then let the SPA render the form.
-    await page.goto(this.loginUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await new Promise(r => setTimeout(r, 3500));
+  expectedDecimals(symbol) { return /JPY/i.test(symbol) ? 3 : 5; },
 
-    // Detect an IP block / bot-challenge page (state 12) — distinct from a
-    // credential failure, so the client + admin alert can say the right thing.
-    const blocked = await page.evaluate(() => {
-      const t = (document.body && document.body.innerText || '').toLowerCase();
-      return /access denied|you have been blocked|verify you are human|unusual traffic|cloudflare|attention required|captcha/.test(t);
-    }).catch(() => false);
-    if (blocked) throw new Error('IP_BLOCKED: Pocket Option returned a block/verification page');
-
-    // Email + password fields — PO uses standard name attributes; we try a few.
-    const emailSel = 'input[name="email"], input[type="email"], #email';
-    const passSel  = 'input[name="password"], input[type="password"], #password';
-    await page.waitForSelector(emailSel, { timeout: 30_000 });
-    await page.type(emailSel, PO_EMAIL, { delay: 25 });
-    await page.type(passSel,  PO_PASSWORD, { delay: 25 });
-
-    // Submit and wait for navigation into the cabinet.
-    await Promise.all([
-      page.evaluate(() => {
-        const btn = document.querySelector(
-          'button[type="submit"], .login-form button, form button'
-        );
-        if (btn) btn.click();
-      }),
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {}),
-    ]);
-
-    // Verify with a few retries — PO redirects through a couple of pages after
-    // login and the cabinet/balance can take a moment to render.
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      await new Promise(r => setTimeout(r, 3000));
-      if (await this.isLoggedIn(page)) return;
-    }
-    throw new Error('login verification failed (still not in cabinet)');
-  }
-
-  // PO uses a socket.io style feed. Frames look roughly like:
-  //   42["updateStream",[["EURUSD_otc", 1700000000, 1.08123]]]
-  //   451-["loadHistoryPeriod",{...}]   (binary/length-prefixed handshakes)
-  //   42["updateAssets",[[id,"EURUSD_otc",...],...]]   (asset catalogue)
-  // We strip the socket.io prefix, JSON-parse, then walk the structure for
-  // price tuples and asset catalogues. Unknown frames are ignored (and sampled
-  // to the log by the caller) so the parser can be tuned against real frames.
-  parseFrame(payload) {
-    if (typeof payload !== 'string' || payload.length < 3) return null;
-    // Strip leading socket.io packet/ack digits (e.g. "42", "451-").
-    const brace = payload.search(/[[{]/);
-    if (brace < 0) return null;
-    let parsed;
-    try { parsed = JSON.parse(payload.slice(brace)); } catch (_) { return null; }
-
+  // Parse one decoded socket.io event payload → { prices:{sym:price}, assets:[] }.
+  parse(node) {
     const out = { prices: {}, assets: [] };
-    let event = null;
-    let body  = parsed;
-    if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
-      event = parsed[0];
-      body  = parsed[1];
-    }
-
-    // ── Asset catalogue (for "جلب الأزواج") ─────────────────────────────────
-    if (/asset/i.test(event || '') || this._looksLikeAssetList(body)) {
-      this._collectAssets(body, out.assets);
-    }
-
-    // ── Live price tuples ───────────────────────────────────────────────────
+    let event = null, body = node;
+    if (Array.isArray(node) && typeof node[0] === 'string') { event = node[0]; body = node[1]; }
+    if (/asset/i.test(event || '') || this._looksLikeAssetList(body)) this._collectAssets(body, out.assets);
     this._collectPrices(body, out.prices);
-
-    if (Object.keys(out.prices).length === 0 && out.assets.length === 0) return null;
     return out;
-  }
+  },
 
   _looksLikeAssetList(body) {
     return Array.isArray(body) && body.length > 5 && Array.isArray(body[0]) &&
            body[0].some(v => typeof v === 'string' && /otc/i.test(v));
-  }
+  },
 
-  // Recursively find [symbol, timestamp, price] tuples.
+  // Find [symbol, timestamp, price] tuples (and {asset/symbol, price} objects).
   _collectPrices(node, acc, depth = 0) {
     if (depth > 6 || node == null) return;
     if (Array.isArray(node)) {
-      // tuple shape: [string, number(ts), number(price)]
       if (node.length >= 3 &&
-          typeof node[0] === 'string' &&
-          typeof node[1] === 'number' &&
-          typeof node[2] === 'number' &&
-          /[a-z]/i.test(node[0])) {
+          typeof node[0] === 'string' && /[a-z]/i.test(node[0]) &&
+          typeof node[1] === 'number' && typeof node[2] === 'number') {
         const sym = this.normalize(node[0]);
-        const price = node[2];
-        if (sym && isFinite(price) && price > 0) acc[sym] = price;
+        if (sym && isFinite(node[2]) && node[2] > 0) acc[sym] = node[2];
         return;
       }
       for (const el of node) this._collectPrices(el, acc, depth + 1);
     } else if (typeof node === 'object') {
       const sym = node.asset || node.symbol || node.s || node.active;
-      const price = node.price ?? node.quote ?? node.value ?? node.close ?? node.c;
+      const price = node.price ?? node.quote ?? node.value ?? node.close ?? node.c ?? node.rate;
       if (typeof sym === 'string' && typeof price === 'number' && price > 0) {
-        const n = this.normalize(sym);
-        if (n) acc[n] = price;
+        const n = this.normalize(sym); if (n) acc[n] = price;
       }
       for (const k of Object.keys(node)) this._collectPrices(node[k], acc, depth + 1);
     }
-  }
+  },
 
   _collectAssets(node, acc, depth = 0) {
     if (depth > 5 || node == null) return;
     if (Array.isArray(node)) {
-      // an asset entry is usually an array containing the symbol + a label
       const symLike = node.find(v => typeof v === 'string' && /otc/i.test(v));
       if (symLike) {
         const symbol = this.normalize(symLike);
@@ -296,321 +172,64 @@ class PocketOptionAdapter {
       const sym = node.symbol || node.asset || node.active || node.id;
       if (typeof sym === 'string' && /otc/i.test(sym)) {
         const symbol = this.normalize(sym);
-        const name   = node.name || node.label || this.displayName(symbol);
-        if (symbol && !acc.some(a => a.symbol === symbol)) acc.push({ symbol, name });
+        if (symbol && !acc.some(a => a.symbol === symbol)) {
+          acc.push({ symbol, name: node.name || node.label || this.displayName(symbol) });
+        }
       }
       for (const k of Object.keys(node)) this._collectAssets(node[k], acc, depth + 1);
     }
-  }
-
-  // DOM fallback for asset discovery if no asset frame is captured: read the
-  // assets / favorites panel on the trading page.
-  async discoverAssetsFromDom(page) {
-    try {
-      return await page.evaluate(() => {
-        const out = [];
-        const seen = new Set();
-        const nodes = document.querySelectorAll(
-          '.assets-table__item, .asset-item, [data-id], .alist__item, li[data-asset]'
-        );
-        nodes.forEach(n => {
-          const txt = (n.textContent || '').trim();
-          const dataAsset = n.getAttribute('data-asset') || n.getAttribute('data-id') || '';
-          if (/otc/i.test(txt) || /otc/i.test(dataAsset)) {
-            const key = (dataAsset || txt).slice(0, 40);
-            if (!seen.has(key)) { seen.add(key); out.push({ raw: dataAsset, label: txt }); }
-          }
-        });
-        return out;
-      });
-    } catch (_) { return []; }
-  }
-
-  // Canonical internal symbol: uppercase, keep _otc marker, strip ':' and spaces.
-  // e.g. "EURUSD_otc" → "EURUSD_OTC". The result NEVER contains ':' so the
-  // TradingView scraper's pairs-listener (which only subscribes chart_symbols
-  // containing ':') will always ignore OTC symbols.
-  normalize(raw) {
-    if (!raw || typeof raw !== 'string') return null;
-    let s = raw.trim().replace(/[:\s]/g, '').toUpperCase();
-    if (!s) return null;
-    return s;
-  }
-
-  // "EURUSD_OTC" → "EUR/USD OTC"
-  displayName(symbol) {
-    const base = symbol.replace(/_?OTC$/i, '');
-    if (base.length === 6) {
-      return `${base.slice(0, 3)}/${base.slice(3)} OTC`;
-    }
-    return `${base} OTC`;
-  }
-
-  // Expected price decimals — used by the DOM price resolver's regex layer to
-  // recognise a valid price (JPY pairs quote 3 dp, most forex OTC 5 dp).
-  expectedDecimals(symbol) {
-    if (/JPY/i.test(symbol)) return 3;
-    return 5;
-  }
-
-  // Candidate DOM selectors for the self-healing price resolver (layers 1 & 2).
-  // Kept on the adapter so each platform supplies its own — extensibility.
-  priceSelectors() {
-    return {
-      // Layer 1 — data-attribute selectors (most precise/fastest).
-      dataAttr: [
-        '[data-price]', '[data-current-price]', '[data-asset-price]',
-        '[data-value].price', '[data-test="asset-price"]',
-      ],
-      // Layer 2 — known CSS class selectors.
-      cssClass: [
-        '.current-price', '.value__val', '.price-value', '.chart-price',
-        '.asset-price', '.current-symbol__price', '.tv-symbol-price-quote__value',
-      ],
-    };
-  }
-}
+  },
+};
 
 // ════════════════════════════════════════════════════════════════════════════
-//  Self-healing DOM price resolver
-// ════════════════════════════════════════════════════════════════════════════
-//  A resilient fallback for reading a pair's price straight from the page DOM
-//  when the websocket feed format changes (site restructure). Four layers, tried
-//  in order, first success wins (the rest are skipped to save resources):
-//    L1 data-attribute selectors   (most precise/fastest)
-//    L2 known CSS class selectors
-//    L3 XPath: nearest numeric text to the displayed pair name
-//    L4 regex scan of the whole DOM text for a price-shaped number
-//  Per-pair "selector health memory" remembers the last layer that worked and
-//  starts there next time; after 3 straight misses on that layer it restarts
-//  from L1. When all layers fail, a STRUCTURED record is buffered and a single
-//  AGGREGATED alert is emitted at most once every 10 minutes (no log flooding).
-class PriceResolver {
-  constructor(adapter) {
-    this.adapter = adapter;
-    this.mem     = new Map();   // symbol → { layer:1..4, fails:n }
-    this._fails  = [];          // buffered structured failures
-    this._lastAggAlert = 0;
-    this.ALERT_EVERY_MS = 10 * 60 * 1000;
-  }
-
-  _order(symbol) {
-    const m = this.mem.get(symbol);
-    const all = [1, 2, 3, 4];
-    if (m && m.fails < 3) return [m.layer, ...all.filter(l => l !== m.layer)];
-    return all; // no memory, or remembered layer failed 3× → restart from L1
-  }
-
-  async resolve(page, symbol) {
-    const dec  = this.adapter.expectedDecimals(symbol);
-    const name = this.adapter.displayName(symbol);
-    const sels = this.adapter.priceSelectors();
-    for (const layer of this._order(symbol)) {
-      let price = null;
-      try { price = await this._tryLayer(page, layer, name, dec, sels); } catch (_) {}
-      if (price != null && isFinite(price) && price > 0) {
-        this.mem.set(symbol, { layer, fails: 0 });   // remember the winner
-        return { price, layer };
-      }
-      const m = this.mem.get(symbol);
-      if (m && m.layer === layer) m.fails = (m.fails || 0) + 1; // bump remembered-layer misses
-    }
-    await this._logFailure(page, symbol);
-    return null;
-  }
-
-  async _tryLayer(page, layer, name, dec, sels) {
-    if (layer === 1) {
-      return page.evaluate((selectors) => {
-        for (const s of selectors) {
-          const el = document.querySelector(s);
-          if (el) {
-            const raw = el.getAttribute('data-price') || el.getAttribute('data-value') || el.textContent || '';
-            const v = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
-            if (isFinite(v) && v > 0) return v;
-          }
-        }
-        return null;
-      }, sels.dataAttr);
-    }
-    if (layer === 2) {
-      return page.evaluate((selectors) => {
-        for (const s of selectors) {
-          const el = document.querySelector(s);
-          if (el) {
-            const v = parseFloat(String(el.textContent || '').replace(/[^0-9.]/g, ''));
-            if (isFinite(v) && v > 0) return v;
-          }
-        }
-        return null;
-      }, sels.cssClass);
-    }
-    if (layer === 3) {
-      // Nearest price-shaped number to the node showing the pair name.
-      return page.evaluate((pairName, decimals) => {
-        const re = new RegExp('\\d{1,7}\\.\\d{' + decimals + '}');
-        const xp = document.evaluate(
-          `//*[contains(normalize-space(.), ${JSON.stringify(pairName)})]`,
-          document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-        for (let i = 0; i < Math.min(xp.snapshotLength, 5); i++) {
-          let node = xp.snapshotItem(i);
-          for (let up = 0; up < 4 && node; up++) {
-            const m = (node.textContent || '').match(re);
-            if (m) { const v = parseFloat(m[0]); if (isFinite(v) && v > 0) return v; }
-            node = node.parentElement;
-          }
-        }
-        return null;
-      }, name, dec);
-    }
-    // Layer 4 — full DOM text regex scan for a number with the expected decimals.
-    return page.evaluate((decimals) => {
-      const re = new RegExp('\\b\\d{1,7}\\.\\d{' + decimals + '}\\b');
-      const m = (document.body && document.body.innerText || '').match(re);
-      return m ? parseFloat(m[0]) : null;
-    }, dec);
-  }
-
-  async _logFailure(page, symbol) {
-    const m = this.mem.get(symbol);
-    let dom = '';
-    try {
-      dom = await page.evaluate(() => (document.body && document.body.innerText || '').slice(0, 200));
-    } catch (_) {}
-    this._fails.push({
-      symbol,
-      at: new Date().toISOString(),
-      lastGoodLayer: m ? m.layer : null,
-      domSample: dom.replace(/\s+/g, ' ').trim(),
-    });
-    this._maybeAlert();
-  }
-
-  _maybeAlert() {
-    const now = Date.now();
-    if (now - this._lastAggAlert < this.ALERT_EVERY_MS) return;
-    if (!this._fails.length) return;
-    this._lastAggAlert = now;
-    const grouped = {};
-    for (const f of this._fails) (grouped[f.symbol] ||= []).push(f);
-    err('──────── OTC price-resolution failures (last 10 min) ────────');
-    for (const sym of Object.keys(grouped)) {
-      const list = grouped[sym];
-      const last = list[list.length - 1];
-      err(`  ${sym}: ${list.length} miss(es) · lastGoodLayer=${last.lastGoodLayer} · ` +
-          `at=${last.at} · dom="${last.domSample.slice(0, 200)}"`);
-    }
-    err('─────────────────────────────────────────────────────────────');
-    this._fails = [];
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  Per-pair circuit breaker
-// ════════════════════════════════════════════════════════════════════════════
-//  After 5 consecutive failures for a pair the circuit OPENS: that pair is
-//  skipped for 5 minutes so we never hammer the site. After the cooldown it goes
-//  HALF-OPEN (one trial allowed); success closes it, another failure re-opens it.
-class CircuitBreaker {
-  constructor(threshold = 5, openMs = 5 * 60 * 1000) {
-    this.threshold = threshold;
-    this.openMs    = openMs;
-    this.state     = new Map(); // key → { fails, openUntil }
-  }
-  _get(key) {
-    let s = this.state.get(key);
-    if (!s) { s = { fails: 0, openUntil: 0 }; this.state.set(key, s); }
-    return s;
-  }
-  // true → allowed to attempt now (closed, or half-open trial). false → open.
-  canAttempt(key) {
-    const s = this._get(key);
-    if (s.openUntil && Date.now() < s.openUntil) return false;
-    return true;
-  }
-  success(key) { const s = this._get(key); s.fails = 0; s.openUntil = 0; }
-  failure(key) {
-    const s = this._get(key);
-    s.fails++;
-    if (s.fails >= this.threshold) {
-      s.openUntil = Date.now() + this.openMs;
-      s.fails = 0; // reset so half-open trial starts a fresh count
-      warn(`circuit OPEN for ${key} — pausing ${Math.round(this.openMs / 60000)} min`);
-    }
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  Candle store  —  builds + persists candles (platform-agnostic)
+//  Candle store — builds + persists candles (platform-agnostic)
 // ════════════════════════════════════════════════════════════════════════════
 class CandleStore {
   constructor() {
-    this.candles    = {};   // `${symbol}_${iv}` → Candle[]
-    this.lastChange = {};   // symbol → ms of last price change (market-open detect)
+    this.candles = {};       // `${symbol}_${iv}` → Candle[]
+    this.lastChange = {};    // symbol → ms of last price change (market-open detect)
+    this._lastPrice = {};
     this._saveTimers = {};
   }
 
-  setEnabled(symbols) {
-    // Ensure a candle array exists for every enabled (symbol,iv); drop disabled.
-    this.enabled = new Set(symbols);
-  }
-
-  isEnabled(sym) { return this.enabled ? this.enabled.has(sym) : false; }
-
   async hydrate(symbols) {
-    if (!db) return;
+    if (!db || !symbols.length) return;
     const keys = [];
     for (const s of symbols) for (const iv of IVS) keys.push(`${s}_${iv}`);
-    if (!keys.length) return;
     try {
       const { data, error } = await db.from('candles').select('key, data').in('key', keys);
       if (error) { err('hydrate error:', error.message); return; }
       let n = 0;
       for (const row of (data || [])) {
-        if (row.key && Array.isArray(row.data) && row.data.length) {
-          this.candles[row.key] = row.data; n++;
-        }
+        if (row.key && Array.isArray(row.data) && row.data.length) { this.candles[row.key] = row.data; n++; }
       }
       if (n) log(`hydrated ${n} OTC candle series`);
     } catch (e) { err('hydrate failed:', e.message); }
   }
 
-  // Build the live candle from the REAL price, identical rules to the TV scraper:
-  //   • same frame → update high/low/close
-  //   • frame rolled over AND price changed → open a new candle (FIFO 150)
-  //   • frame rolled over but price frozen → hold the current candle (no flat)
   tick(symbol, price) {
     if (price == null || !isFinite(price) || price <= 0) return;
-    if (this.lastChange[symbol] === undefined || this._lastPrice?.[symbol] !== price) {
-      (this._lastPrice ||= {})[symbol] = price;
-      this.lastChange[symbol] = Date.now();
-    }
+    if (this._lastPrice[symbol] !== price) { this._lastPrice[symbol] = price; this.lastChange[symbol] = Date.now(); }
     for (const iv of IVS) this._tickIv(symbol, iv, price);
   }
 
   _tickIv(symbol, iv, price) {
-    const key   = `${symbol}_${iv}`;
-    let   arr   = this.candles[key] || (this.candles[key] = []);
+    const key = `${symbol}_${iv}`;
+    const arr = this.candles[key] || (this.candles[key] = []);
     const ivSec = ivToSeconds(iv);
-    const now   = Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000);
     const cTime = Math.floor(now / ivSec) * ivSec;
-    const last  = arr.length ? arr[arr.length - 1] : null;
-
-    if (!last) {
-      arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-      this._schedSave(key);
-      return;
-    }
+    const last = arr.length ? arr[arr.length - 1] : null;
+    if (!last) { arr.push({ t: cTime, o: price, h: price, l: price, c: price }); this._schedSave(key); return; }
     if (cTime === last.t) {
       if (price > last.h) last.h = price;
       if (price < last.l) last.l = price;
       last.c = price;
       return;
     }
-    // frame rolled over — open a new candle ONLY if price changed vs last close
-    if (price !== last.c) {
+    if (price !== last.c) {           // new candle only when frame elapsed AND price changed
       arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-      if (arr.length > MAX_CANDLES) arr.shift();   // FIFO: keep last 150
+      if (arr.length > MAX_CANDLES) arr.shift();
       this._schedSave(key);
     }
   }
@@ -618,17 +237,13 @@ class CandleStore {
   _schedSave(key) {
     if (!db) return;
     if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
-    this._saveTimers[key] = setTimeout(() => {
-      delete this._saveTimers[key];
-      this._save(key);
-    }, 3000);
+    this._saveTimers[key] = setTimeout(() => { delete this._saveTimers[key]; this._save(key); }, 3000);
   }
 
   _save(key) {
     const candles = this.candles[key];
     if (!db || !candles || !candles.length) return;
-    db.from('candles')
-      .upsert({ key, data: candles, updated_at: new Date().toISOString() })
+    db.from('candles').upsert({ key, data: candles, updated_at: new Date().toISOString() })
       .then(({ error }) => { if (error) err('save', key, error.message); })
       .catch(e => err('save', key, e.message));
   }
@@ -640,37 +255,41 @@ class CandleStore {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  Persistent session engine
+//  Direct WebSocket client (Engine.IO / Socket.IO)
 // ════════════════════════════════════════════════════════════════════════════
-class OtcEngine {
-  constructor(adapter) {
-    this.adapter   = adapter;
-    this.browser   = null;
-    this.page      = null;
-    this.cdp       = null;
-    this.ready     = false;
-    this.prices    = {};         // symbol → latest price
-    this._priceAt  = {};         // symbol → ms when its WS price last arrived
-    this.store     = new CandleStore();
-    this.resolver  = new PriceResolver(adapter);   // self-healing DOM fallback
-    this.breaker   = new CircuitBreaker();         // per-pair circuit breaker
-    this._domBusy  = false;
-    this._memGuardBusy = false;
-    this.enabledSymbols = new Set();
-    this.scanRequested  = false;
-    this._scanAssets    = [];    // assets captured during a scan window
-    this._scanning      = false;
-    this.loginFails     = 0;
-    this.reconnects     = 0;
-    this._reconnecting  = false;   // a reconnect/login attempt is in flight
-    this._reconnectTimer = null;   // pending backoff timer
-    this._unknownFrameSamples = 0;
+class PoWsClient {
+  constructor(proto) {
+    this.proto = proto;
+    this.ws = null;
+    this.prices = {};
+    this._priceAt = {};
+    this.store = new CandleStore();
+    this.enabled = new Set();
+    this.connected = false;
+    this.authed = false;
+    this.loginFails = 0;
+    this.reconnects = 0;
+    this._reconnecting = false;
+    this._reconnectTimer = null;
+    this._scanning = false;
+    this._scanAssets = [];
     this._lastPricesWrite = 0;
+    this._unknownSamples = 0;
+    this._phase = 'boot';
+    this._hbTimer = null;     // websocket heartbeat (randomised)
+    this._httpTimer = null;   // optional HTTP keep-alive (2nd channel)
+    this._beatCount = 0;
+    // ── Self-healing state ──
+    this._lastDataAt = 0;     // ms of last live data frame (heartbeat success proof)
+    this._wdTimer = null;     // watchdog interval
+    this._staleChecks = 0;    // consecutive "no fresh data" checks (fast-fail counter)
+    this._repairing = false;
+    this._repairFails = 0;
+    this._repairOpenUntil = 0;   // circuit-breaker: skip repairs until this time
+    this._phaseSince = null;     // when the current phase started (for UX escalation)
+    this._health = { lastHeartbeatOk: null, repairs: 0, lastRepairAt: null };
   }
 
-  // Smart backoff between login attempts so we never hammer PO (which would get
-  // the account/IP blocked): 1st failure → 5s, 2nd → 15s, 3rd+ → 60s. A reconnect
-  // after a previously-healthy session (loginFails 0) retries almost immediately.
   _backoffMs() {
     switch (this.loginFails) {
       case 0:  return 1000;
@@ -680,278 +299,363 @@ class OtcEngine {
     }
   }
 
-  _settle(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  // ── Browser lifecycle ──────────────────────────────────────────────────────
-  async launch() {
-    if (!puppeteer) throw new Error('no puppeteer runtime available');
-    log('launching persistent browser (low-RAM mode)…');
-
-    // Low-memory Chromium config (Render Free = 512 MB).
-    let execPath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    let baseArgs = [];
-    let headless = true;
-    if (chromium) {
-      // @sparticuz/chromium: disable graphics (WebGL/GPU) for less RAM.
-      try { chromium.setGraphicsMode = false; } catch (_) {}
-      baseArgs = chromium.args || [];
-      if (!execPath) execPath = await chromium.executablePath();
-      headless = chromium.headless ?? true;
-    }
-
-    // IMPORTANT: deliberately NO --single-process / --no-zygote /
-    // --disable-features=site-per-process / --max-old-space-size. Those crash
-    // Chromium ("browser disconnected") on Pocket Option's heavy SPA. The
-    // @sparticuz/chromium args + request blocking already keep memory low.
-    const ramArgs = [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu', '--disable-blink-features=AutomationControlled',
-      '--disable-extensions', '--disable-background-networking',
-      '--disable-background-timer-throttling', '--disable-default-apps',
-      '--disable-sync', '--disable-translate', '--mute-audio',
-      '--no-first-run', '--no-default-browser-check',
-      '--disable-software-rasterizer', '--window-size=900,600',
-    ];
-    // De-dup (chromium.args may already contain some of these).
-    const argSet = new Set([...baseArgs, ...ramArgs]);
-
-    this.browser = await puppeteer.launch({
-      headless,
-      executablePath: execPath || undefined,
-      args: [...argSet],
-      defaultViewport: { width: 900, height: 600 },
-    });
-
-    // Hard guarantee of a SINGLE tab: close any extra page/popup the moment it
-    // opens (PO occasionally spawns popups/ads). Our main page is kept.
-    this.browser.on('targetcreated', async (target) => {
-      try {
-        if (target.type() !== 'page') return;
-        const pg = await target.page();
-        if (pg && pg !== this.page) {
-          warn('closing unexpected extra tab/popup');
-          await pg.close().catch(() => {});
-        }
-      } catch (_) {}
-    });
-    this.browser.on('disconnected', () => {
-      warn('browser disconnected');
-      this.ready = false;
-    });
-    await this._openAndLogin();
+  // Build the Engine.IO message to authenticate. PO_AUTH may be the full frame
+  // ("42[...]"), the socket.io event ("[\"auth\",{...}]"), the bare object
+  // ("{...}") or just a session string.
+  buildAuthFrame() {
+    const a = activeAuth;
+    if (!a) return null;
+    if (/^4\d/.test(a)) return a;
+    if (a.startsWith('[')) return '42' + a;
+    if (a.startsWith('{')) return '42["auth",' + a + ']';
+    return '42["auth",' + JSON.stringify({ session: a, isDemo: PO_IS_DEMO ? 1 : 0 }) + ']';
   }
 
-  async _openAndLogin() {
-    this.ready = false;
-
-    // Reuse the browser's existing default tab — never open a second one.
-    const pages = await this.browser.pages();
-    this.page = (pages && pages[0]) ? pages[0] : await this.browser.newPage();
-
-    await this.page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    );
-
-    // Strong resource blocking — abort heavy assets to keep RAM/CPU minimal.
-    // Only HTML + JS + the data sockets are allowed; the price comes from the
-    // websocket feed, so blocked images/css/fonts never matter.
-    try {
-      await this.page.setRequestInterception(true);
-      this.page.removeAllListeners('request');
-      this.page.on('request', (req) => {
-        try {
-          const type = req.resourceType();
-          const url  = req.url();
-          if (BLOCKED_RESOURCE_TYPES.has(type) || BLOCKED_URL_RE.test(url)) {
-            req.abort();
-          } else {
-            req.continue();
-          }
-        } catch (_) { try { req.continue(); } catch (_) {} }
-      });
-    } catch (e) { warn('request interception setup failed:', e.message); }
-
-    // Tap the page's own websocket frames via CDP — this is how we read the live
-    // price every second from the SAME open session (no per-read tab, no cookies).
-    try { if (this.cdp) await this.cdp.detach(); } catch (_) {}
-    this.cdp = await this.page.target().createCDPSession();
-    await this.cdp.send('Network.enable');
-    this.cdp.removeAllListeners('Network.webSocketFrameReceived');
-    this.cdp.on('Network.webSocketFrameReceived', ({ response }) => {
-      this._onFrame(response && response.payloadData);
-    });
-    // PO sometimes wraps payloads in the *sent* direction too; harmless to ignore.
-
-    // Go to the chart page; if it bounces to login, authenticate then return.
-    // Use 'domcontentloaded' (PO's SPA keeps sockets open and never reaches
-    // networkidle, which would waste the full 60s timeout every navigation).
-    await this.page.goto(this.adapter.chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-      .catch(() => {});
-    await this._settle(4000);
-
-    if (!(await this.adapter.isLoggedIn(this.page))) {
-      log('not logged in — authenticating…');
-      // Tell clients we're re-logging into the platform (state 4).
-      await this._reportStatus({ connected: true, loggedIn: false, phase: 'relogin' });
-      await this.adapter.login(this.page);
-      this.loginFails = 0;
-      log('login OK — opening chart page');
-      await this.page.goto(this.adapter.chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-        .catch(() => {});
-      await this._settle(4000);
-    } else {
-      log('already logged in');
-    }
-
-    this.ready = true;
-    await this._reportStatus({ connected: true, loggedIn: true, phase: 'live', lastError: '' });
-    log('session live on', this.page.url());
-  }
-
-  _onFrame(payload) {
-    if (!payload) return;
-    let res;
-    try { res = this.adapter.parseFrame(payload); } catch (_) { res = null; }
-    if (!res) {
-      // Sample a few unparsed frames to the log to aid selector/format tuning.
-      if (this._unknownFrameSamples < 8 && /otc/i.test(String(payload))) {
-        this._unknownFrameSamples++;
-        log('unparsed frame sample:', String(payload).slice(0, 200));
-      }
+  start() {
+    if (!activeAuth) {
+      // No token yet. If we have credentials, try to auto-capture one; else ask
+      // for a manual capture. Either way the TradingView side is unaffected.
+      warn('no session token — ' + (PO_EMAIL && PO_PASSWORD
+        ? 'attempting automatic capture…'
+        : 'run get-po-ssid.js locally and set PO_AUTH (or set PO_EMAIL/PO_PASSWORD for auto-capture).'));
+      this._reportStatus({ connected: false, loggedIn: false, phase: 'login_failed', lastError: 'no session token' });
+      if (PO_EMAIL && PO_PASSWORD) this._repair();
       return;
     }
-    if (res.prices) {
+    this._connect();
+  }
+
+  _connect() {
+    this._clearWs();
+    this.authed = false;
+    log('connecting to', activeWsUrl.replace(/\?.*$/, '?…'));
+    let ws;
+    try {
+      ws = new WebSocketLib(activeWsUrl, {
+        headers: {
+          Origin: 'https://pocketoption.com',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+    } catch (e) { warn('ws create failed:', e.message); this._scheduleReconnect(); return; }
+    this.ws = ws;
+
+    ws.on('open', () => {
+      this.connected = true;
+      log('ws open — handshaking');
+      this._reportStatus({ connected: true, loggedIn: false, phase: 'relogin' });
+    });
+    ws.on('message', (data, isBinary) => this._onMessage(data, isBinary));
+    ws.on('close', (code) => this._onClose(code));
+    ws.on('error', (e) => warn('ws error:', e.message));
+  }
+
+  _onMessage(data, isBinary) {
+    if (isBinary) {
+      if (this._unknownSamples < 6) { this._unknownSamples++; log('binary frame', data.length, 'bytes (sample for tuning)'); }
+      return;
+    }
+    const msg = data.toString();
+
+    // Engine.IO ping → pong.
+    if (msg === '2') { try { this.ws.send('3'); } catch (_) {} return; }
+    if (msg === '3') return;
+
+    // Engine.IO open handshake → connect to default namespace.
+    if (msg[0] === '0') { try { this.ws.send('40'); } catch (_) {} return; }
+
+    // Socket.IO connected → send auth.
+    if (msg.startsWith('40')) {
+      const af = this.buildAuthFrame();
+      if (af) { try { this.ws.send(af); log('auth frame sent'); } catch (_) {} }
+      return;
+    }
+
+    // Socket.IO event / ack ("42[...]", "451-[...]", "43[...]" …).
+    if (/^4\d/.test(msg)) {
+      const body = msg.replace(/^4\d+(-)?/, '');
+      if (!body || (body[0] !== '[' && body[0] !== '{')) return;
+      let parsed;
+      try { parsed = JSON.parse(body); }
+      catch (_) {
+        if (this._unknownSamples < 10 && /otc/i.test(msg)) { this._unknownSamples++; log('unparsed event sample:', msg.slice(0, 220)); }
+        return;
+      }
+      this._handleEvent(parsed, msg);
+    }
+  }
+
+  _handleEvent(parsed, raw) {
+    const res = this.proto.parse(parsed);
+    const gotPrices = res && Object.keys(res.prices).length;
+    const gotAssets = res && res.assets.length;
+
+    if (gotPrices || gotAssets) {
+      this._lastDataAt = Date.now();           // proof the session is alive
+      this._health.lastHeartbeatOk = new Date().toISOString();
+      this._staleChecks = 0;
+      if (!this.authed) {
+        this.authed = true; this.loginFails = 0; this._repairFails = 0;
+        this._reportStatus({ connected: true, loggedIn: true, phase: 'live' });
+        log('authenticated — receiving live data ✅');
+        this._startHeartbeat();   // keep the session "active" so the token never idles out
+        this._startWatchdog();    // detect a silent death even while "connected"
+      }
+    }
+    if (gotPrices) {
       const now = Date.now();
-      for (const [sym, price] of Object.entries(res.prices)) {
-        this.prices[sym] = price;
-        this._priceAt[sym] = now;   // WS source freshness (for DOM-fallback gating)
-      }
+      for (const [sym, price] of Object.entries(res.prices)) { this.prices[sym] = price; this._priceAt[sym] = now; }
     }
-    if (res.assets && res.assets.length && this._scanning) {
-      for (const a of res.assets) {
-        if (!this._scanAssets.some(x => x.symbol === a.symbol)) this._scanAssets.push(a);
-      }
+    if (gotAssets && this._scanning) {
+      for (const a of res.assets) if (!this._scanAssets.some(x => x.symbol === a.symbol)) this._scanAssets.push(a);
     }
-  }
-
-  // ── Health check + auto-reconnect ──────────────────────────────────────────
-  async healthCheck() {
-    // Don't probe while a reconnect (with its backoff) is already in progress.
-    if (this._reconnecting || this._reconnectTimer) return;
-    try {
-      const dead = !this.browser || !this.browser.connected ||
-                   !this.page || this.page.isClosed();
-      let loggedIn = false;
-      if (!dead) loggedIn = await this.adapter.isLoggedIn(this.page);
-
-      if (dead || !loggedIn) {
-        warn(`health check failed (dead=${dead}, loggedIn=${loggedIn}) — scheduling reconnect`);
-        this._scheduleReconnect();
-      } else {
-        this.loginFails = 0;   // healthy → reset backoff
-        await this._reportStatus({ connected: true, loggedIn: true, lastError: '' });
-      }
-    } catch (e) {
-      warn(`health check threw (${e.message}) — scheduling reconnect`);
-      this._scheduleReconnect();
+    // Sample a few events that yielded nothing — helps tune the parser to PO.
+    if (!gotPrices && !gotAssets && this._unknownSamples < 10 && /otc|stream|asset|price/i.test(raw)) {
+      this._unknownSamples++; log('event yielded no price (sample):', raw.slice(0, 220));
     }
   }
 
-  // Schedule a single reconnect after the smart backoff delay. Idempotent: if a
-  // reconnect is already pending or running, this is a no-op (prevents bursts).
-  _scheduleReconnect(reason) {
-    if (this._reconnecting || this._reconnectTimer) return;
-    this.ready = false;
+  _onClose(code) {
+    const wasAuthed = this.authed;
+    this.connected = false; this.authed = false;
+    this._clearWs();
+    if (!wasAuthed) this.loginFails++;   // closed before any data ⇒ likely bad/expired token
+    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, fails=${this.loginFails})`);
+    const phase = (!wasAuthed && this.loginFails >= MAX_LOGIN_FAILS) ? 'login_failed' : 'reconnecting';
+    this._reportStatus({ connected: false, loggedIn: false, phase });
+    if (phase === 'login_failed') {
+      err('🟥🟥🟥 ADMIN ACTION REQUIRED — OTC TOKEN INVALID/EXPIRED 🟥🟥🟥');
+      err('PO closed the socket before sending data — the session token (PO_AUTH) is likely expired.');
+      err('Re-capture it with get-po-ssid.js and update PO_AUTH on Render. (TradingView keeps working.)');
+      err('🟥🟥🟥────────────────────────────────────────────────🟥🟥🟥');
+    }
+    this._scheduleReconnect();
+  }
+
+  _scheduleReconnect() {
+    if (this._reconnectTimer) return;
     const delay = this._backoffMs();
-    warn(`reconnect scheduled in ${Math.round(delay / 1000)}s ` +
-         `(consecutive fails=${this.loginFails})${reason ? ' — ' + reason : ''}`);
-    this._reconnectTimer = setTimeout(() => {
-      this._reconnectTimer = null;
-      this._reconnect();
-    }, delay);
+    this.reconnects++;
+    warn(`reconnect #${this.reconnects} in ${Math.round(delay / 1000)}s (fails=${this.loginFails})`);
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this._connect(); }, delay);
   }
 
-  async _reconnect() {
-    if (this._reconnecting) return;
-    this._reconnecting = true;
-    this.ready = false;
-    this.reconnects++;
-    log(`reconnect attempt #${this.reconnects}…`);
-    // Tell clients we're re-establishing the session (state 4).
-    await this._reportStatus({ connected: false, loggedIn: false, phase: 'reconnecting' });
-    try {
-      // Recreate the browser if it died (Target closed / detached), else just
-      // re-login on the SAME single tab (no new tab, no churn).
-      if (!this.browser || !this.browser.connected) {
-        try { if (this.browser) await this.browser.close(); } catch (_) {}
-        await this.launch();
+  _clearWs() {
+    this._stopHeartbeat();
+    this._stopWatchdog();
+    if (this.ws) { try { this.ws.removeAllListeners(); this.ws.terminate(); } catch (_) {} this.ws = null; }
+  }
+
+  // ── Watchdog: instant detection of a silent death ──────────────────────────
+  // Even while the socket stays "connected", a dead token stops fresh data.
+  // Every 5s: if no data for >30s, fast-retry (a beat). 3 stale checks in a row
+  // (~15s) ⇒ token is dead ⇒ trigger self-repair.
+  _startWatchdog() {
+    this._stopWatchdog();
+    this._wdTimer = setInterval(() => {
+      if (!this.authed || this._repairing) return;
+      const age = Date.now() - this._lastDataAt;
+      if (age > 30_000) {
+        this._staleChecks++;
+        warn(`no fresh data for ${Math.round(age / 1000)}s — fast retry (${this._staleChecks}/3)`);
+        this._beat();                       // fast re-subscribe / ping
+        if (this._staleChecks >= 3) {
+          this._staleChecks = 0;
+          warn('token appears DEAD despite heartbeat — starting self-repair');
+          this._repair();
+        }
       } else {
-        await this._openAndLogin();
+        this._staleChecks = 0;
       }
-      this.loginFails = 0;            // success → reset backoff
-      this._reconnecting = false;
-      log('reconnect OK — session live again');
+    }, 5000);
+  }
+
+  _stopWatchdog() { if (this._wdTimer) { clearInterval(this._wdTimer); this._wdTimer = null; } }
+
+  // ── Self-repair: automatic token re-capture (brief temporary browser) ──────
+  async _repair() {
+    if (this._repairing) return;
+    if (this._repairOpenUntil && Date.now() < this._repairOpenUntil) return;   // circuit open
+    this._repairing = true;
+    this.authed = false;
+    this._stopHeartbeat();
+    this._reportStatus({ connected: false, loggedIn: false, phase: 'repairing' });
+    log('self-repair: re-capturing session token…');
+    try {
+      const ok = await this.recaptureToken();
+      if (!ok) throw new Error('recapture produced no token');
+      this._repairFails = 0; this._repairOpenUntil = 0;
+      this._health.repairs++; this._health.lastRepairAt = new Date().toISOString();
+      log('self-repair OK ✅ — reconnecting with fresh token');
+      this._repairing = false;
+      this._connect();
     } catch (e) {
-      this.loginFails++;
-      this._reconnecting = false;
-      err(`reconnect/login failed (${this.loginFails} in a row): ${e.message}`);
-      // State 8: a genuine LOGIN failure (≥3 in a row) needs manual intervention
-      // (password changed / account locked / extra verification). Distinct phase
-      // + a distinct, unmistakable admin alert. TradingView pairs are unaffected.
-      const ipBlocked = /IP_BLOCKED/.test(e.message);
-      const phase = ipBlocked ? 'ip_blocked'
-                  : this.loginFails >= MAX_LOGIN_FAILS ? 'login_failed'
-                  : 'reconnecting';
-      await this._reportStatus({ connected: false, loggedIn: false, phase, lastError: e.message });
-      if (ipBlocked) {
-        err('🟧🟧🟧 OTC: Pocket Option appears to have BLOCKED the server IP (bot challenge) 🟧🟧🟧');
-        err('Stealth may have been detected. The backoff keeps retrying; consider rotating IP if persistent.');
+      this._repairFails++;
+      this._repairing = false;
+      err(`self-repair failed (${this._repairFails}): ${e.message}`);
+      if (this._repairFails >= 3) {
+        // Circuit-breaker: stop hammering for 5 min, and raise the last-resort alert.
+        this._repairOpenUntil = Date.now() + 5 * 60 * 1000;
+        this._repairFails = 0;
+        this._reportStatus({ connected: false, loggedIn: false, phase: 'login_failed', lastError: 'auto-repair failed; manual token needed' });
+        err('🟥🟥🟥 LAST RESORT — AUTO-REPAIR FAILED 🟥🟥🟥');
+        err('Could not auto-recapture the token after 3 tries (paused 5 min).');
+        err('Run get-po-ssid.js locally ONCE and update PO_AUTH on Render. (TradingView unaffected.)');
+        err('🟥🟥🟥────────────────────────────────────────────🟥🟥🟥');
+        setTimeout(() => this._repair(), 5 * 60 * 1000 + 1000);
+      } else {
+        setTimeout(() => this._repair(), 15_000);   // quick retry within the 3-try window
       }
-      if (this.loginFails >= MAX_LOGIN_FAILS && !ipBlocked) {
-        err('🟥🟥🟥 ADMIN ACTION REQUIRED — OTC LOGIN FAILED 🟥🟥🟥');
-        err(`Pocket Option login failed ${this.loginFails} times in a row (NOT a session drop).`);
-        err('Likely cause: password changed, account locked, or extra verification (captcha/2FA).');
-        err(`Last error: ${e.message}`);
-        err('Fix PO_EMAIL / PO_PASSWORD on Render, or clear the verification, then it self-heals.');
-        err('(TradingView forex pairs keep running normally — only OTC is affected.)');
-        err('🟥🟥🟥────────────────────────────────────────────────🟥🟥🟥');
-      }
-      // Re-arm with the next (longer) backoff step.
-      this._scheduleReconnect('previous attempt failed');
     }
   }
 
-  // ── Per-second price → candle tick (only for enabled pairs) ────────────────
+  // Temporary, login-only browser "strike": open → log in → grab the new auth
+  // frame via CDP → close immediately. Kept short + resource-blocked to minimise
+  // RAM (it is NOT a persistent browser).
+  async recaptureToken() {
+    if (!PO_EMAIL || !PO_PASSWORD) { warn('auto-recapture needs PO_EMAIL/PO_PASSWORD'); return false; }
+    let puppeteer, chromium, browser = null;
+    try {
+      chromium = require('@sparticuz/chromium');
+      puppeteer = require('puppeteer-core');
+      try { chromium.setGraphicsMode = false; } catch (_) {}
+    } catch (e) { warn('recapture deps missing:', e.message); return false; }
+    try {
+      const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
+      browser = await puppeteer.launch({
+        headless: chromium.headless ?? true,
+        executablePath: execPath || undefined,
+        args: [...(chromium.args || []), '--no-sandbox', '--disable-setuid-sandbox',
+               '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions',
+               '--disable-background-networking', '--mute-audio'],
+        defaultViewport: { width: 800, height: 600 },
+      });
+      const page = (await browser.pages())[0] || await browser.newPage();
+      try {
+        await page.setRequestInterception(true);
+        page.on('request', r => {
+          const t = r.resourceType();
+          if (t === 'image' || t === 'media' || t === 'font' || t === 'stylesheet') r.abort();
+          else r.continue();
+        });
+      } catch (_) {}
+      const cdp = await page.target().createCDPSession();
+      await cdp.send('Network.enable');
+      let authFrame = null, wsUrl = null;
+      cdp.on('Network.webSocketCreated', ({ url }) => { if (/po\.market|socket\.io/i.test(url)) wsUrl = url; });
+      cdp.on('Network.webSocketFrameSent', ({ response }) => {
+        const d = (response && response.payloadData) || '';
+        if (/"auth"/.test(d) && !authFrame) authFrame = d;
+      });
+
+      await page.goto(PO_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3500));
+      await page.type('input[type="email"], input[name="email"], #email', PO_EMAIL, { delay: 25 }).catch(() => {});
+      await page.type('input[type="password"], input[name="password"], #password', PO_PASSWORD, { delay: 25 }).catch(() => {});
+      await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button'); if (b) b.click(); }).catch(() => {});
+
+      const start = Date.now();
+      while (Date.now() - start < 45_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+
+      try { await browser.close(); } catch (_) {} browser = null;
+
+      if (authFrame) {
+        activeAuth = authFrame.replace(/^4\d+(-)?/, '');   // store ["auth",{...}]
+        if (wsUrl) activeWsUrl = wsUrl;
+        await saveToken(activeAuth, activeWsUrl);
+        log('recaptured a fresh token ✅');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      warn('recapture error:', e.message);
+      return false;
+    } finally {
+      if (browser) { try { await browser.close(); } catch (_) {} }
+    }
+  }
+
+  // ── Strong multi-action heartbeat ──────────────────────────────────────────
+  // Goal: keep the session "active" in PO's eyes so the token never idles out.
+  //   • randomised 20–40s cadence (looks human, not a fixed robotic tick)
+  //   • each beat fires SEVERAL small actions: Engine.IO ping, any captured
+  //     heartbeat frames (PO_HEARTBEAT), and a re-subscribe to every enabled
+  //     symbol (PO_SUBSCRIBE) — i.e. it actively "uses" the session
+  //   • every 10th beat re-sends the auth frame as a proactive session touch
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    const schedule = () => { this._hbTimer = setTimeout(() => { this._beat(); schedule(); }, nextBeatMs()); };
+    schedule();
+  }
+
+  _stopHeartbeat() { if (this._hbTimer) { clearTimeout(this._hbTimer); this._hbTimer = null; } }
+
+  _send(frame) { try { if (this.ws && this.ws.readyState === WebSocketLib.OPEN) this.ws.send(frame); } catch (_) {} }
+
+  _beat() {
+    if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
+    this._beatCount++;
+    // 1) Engine.IO ping (proactive, on top of answering server pings).
+    this._send('2');
+    // 2) Replay any real heartbeat frames captured from the browser.
+    for (const f of PO_HEARTBEAT) this._send(typeof f === 'string' ? f : JSON.stringify(f));
+    // 3) Actively use the session: (re)subscribe to every enabled symbol.
+    if (PO_SUBSCRIBE) {
+      for (const sym of this.enabled) this._send(PO_SUBSCRIBE.replace(/\{symbol\}/g, sym));
+    }
+    // 4) Proactive session touch: re-auth occasionally (every ~10 beats).
+    if (this._beatCount % 10 === 0) {
+      const af = this.buildAuthFrame();
+      if (af) this._send(af);
+    }
+  }
+
+  // Optional 2nd keep-alive channel: periodic HTTPS GET with the session cookie,
+  // so the session also stays warm over HTTP (dual keep-alive). Off unless
+  // PO_KEEPALIVE_URL is set.
+  startHttpKeepAlive() {
+    if (!PO_KEEPALIVE_URL || this._httpTimer) return;
+    const hit = () => {
+      try {
+        const u = new URL(PO_KEEPALIVE_URL);
+        const req = https.request({
+          hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            ...(PO_COOKIE ? { Cookie: PO_COOKIE } : {}),
+          },
+        }, r => r.resume());
+        req.on('error', () => {});
+        req.end();
+      } catch (_) {}
+      this._httpTimer = setTimeout(hit, nextBeatMs() * 3);  // ~1–2 min
+    };
+    hit();
+    log('HTTP keep-alive channel active');
+  }
+
+  // ── Per-second candle tick for enabled pairs + live price flush ────────────
   tickAll() {
-    for (const sym of this.enabledSymbols) {
-      const price = this.prices[sym];
-      if (price != null) this.store.tick(sym, price);
+    for (const sym of this.enabled) {
+      const p = this.prices[sym];
+      if (p != null) this.store.tick(sym, p);
     }
     this._flushPrices();
   }
 
-  // Write the latest per-second price of every enabled pair to configs/otc_prices
-  // (one row, batched) so the user chart can render OTC live. Throttled + only
-  // when something changed, to keep write volume sane.
   _flushPrices() {
     if (!db) return;
     const now = Date.now();
     if (now - this._lastPricesWrite < PRICE_MS) return;
-    const snapshot = {};
-    let any = false;
-    for (const sym of this.enabledSymbols) {
+    const snapshot = {}; let any = false;
+    for (const sym of this.enabled) {
       const p = this.prices[sym];
-      if (p == null) continue;   // no data yet → client shows warming/unavailable
-      // Per-pair state hint so the client can pick the exact status message:
-      //   circuit   → breaker open for this pair
-      //   resolving → alive but the price source has gone stale (read failing)
-      //   closed    → price present but market not moving (closed)
-      //   live      → flowing normally
-      let st;
+      if (p == null) continue;
       const stale = this._priceAt[sym] && (now - this._priceAt[sym] > 10_000);
-      if (!this.breaker.canAttempt(sym)) st = 'circuit';
-      else if (stale)                    st = 'resolving';
+      let st;
+      if (!this.connected) st = 'resolving';
+      else if (stale) st = 'resolving';
       else if (!this.store.isMarketOpen(sym)) st = 'closed';
       else st = 'live';
       snapshot[sym] = { p, o: this.store.isMarketOpen(sym), t: Math.floor(now / 1000), st };
@@ -964,158 +668,63 @@ class OtcEngine {
       .catch(e => err('otc_prices write:', e.message));
   }
 
+  applyEnabled(symbols) {
+    this.enabled = new Set(symbols);
+    log(`tracking ${this.enabled.size} enabled OTC pair(s):`, [...this.enabled].join(', ') || '(none)');
+  }
+
   async _reportStatus(patch) {
+    const newPhase = patch.phase || this._phase;
+    if (newPhase !== this._phase) this._phaseSince = new Date().toISOString();   // phase transition time (for client UX escalation)
+    this._phase = newPhase;
     if (!db) return;
-    // phase tells the client the precise macro-state so it can show the right
-    // message: 'live' | 'relogin' | 'reconnecting' | 'boot'. updatedAt is a
-    // heartbeat — a stale value means the whole process/Render is down.
-    this._phase = patch.phase || this._phase || 'boot';
     try {
       await db.from('configs').update({
         data: {
-          connected: !!patch.connected,
-          loggedIn:  !!patch.loggedIn,
-          phase:     this._phase,
-          reconnects: this.reconnects,
-          lastError: patch.lastError || '',
+          connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
+          phaseSince: this._phaseSince,
+          reconnects: this.reconnects, lastError: patch.lastError || '',
+          // Session health log (helps understand real token lifetime over time).
+          lastHeartbeatOk: this._health.lastHeartbeatOk,
+          repairs: this._health.repairs,
+          lastRepairAt: this._health.lastRepairAt,
           updatedAt: new Date().toISOString(),
         },
       }).eq('id', 'otc_status');
     } catch (_) {}
   }
 
-  // ── Self-healing DOM price fallback ─────────────────────────────────────────
-  // For enabled pairs whose websocket price has gone stale (likely a site format
-  // change), read the price straight from the DOM via the 4-layer resolver,
-  // gated by the per-pair circuit breaker. One pair failing never blocks others.
-  async domFallback() {
-    if (!this.ready || this._domBusy || !this.page) return;
-    this._domBusy = true;
-    try {
-      const now = Date.now();
-      for (const sym of this.enabledSymbols) {
-        const fresh = this._priceAt[sym] && (now - this._priceAt[sym] < 6000);
-        if (fresh) continue;                          // WS still feeding → skip
-        if (!this.breaker.canAttempt(sym)) continue;  // circuit open for this pair
-        let r = null;
-        try { r = await this.resolver.resolve(this.page, sym); } catch (_) {}
-        if (r && r.price > 0) {
-          this.prices[sym]   = r.price;
-          this._priceAt[sym] = Date.now();
-          this.breaker.success(sym);
-        } else {
-          this.breaker.failure(sym);
-        }
-      }
-    } catch (e) {
-      warn('domFallback error:', e.message);
-    } finally {
-      this._domBusy = false;
-    }
-  }
-
-  // ── Pre-emptive memory guard ────────────────────────────────────────────────
-  // If RSS crosses 85% of the limit, restart ONLY the browser instance (not the
-  // whole process) so Chromium's memory is reclaimed before an OOM can happen.
-  async memoryGuard() {
-    if (this._memGuardBusy || this._reconnecting) return;
-    const limitMb = parseInt(process.env.OTC_MEM_LIMIT_MB || '512', 10);
-    const rssMb = process.memoryUsage().rss / (1024 * 1024);
-    if (rssMb < limitMb * 0.85) return;
-    this._memGuardBusy = true;
-    warn(`memory guard: RSS ${Math.round(rssMb)}MB ≥ 85% of ${limitMb}MB — restarting browser`);
-    try {
-      await this.softRestartBrowser();
-    } catch (e) {
-      err('memory guard restart failed:', e.message);
-      this._scheduleReconnect('memory-guard restart failed');
-    } finally {
-      this._memGuardBusy = false;
-    }
-  }
-
-  async softRestartBrowser() {
-    this.ready = false;
-    try { if (this.cdp) await this.cdp.detach(); } catch (_) {}
-    try { if (this.browser) await this.browser.close(); } catch (_) {}
-    this.browser = null; this.page = null; this.cdp = null;
-    if (global.gc) { try { global.gc(); } catch (_) {} }
-    await this.launch();   // fresh, clean browser + page + re-login
-    log('browser soft-restarted (memory guard)');
-  }
-
-  // ── Enabled-pairs sync (from otc_pairs library) ────────────────────────────
-  applyEnabled(symbols) {
-    this.enabledSymbols = new Set(symbols);
-    this.store.setEnabled(symbols);
-    log(`tracking ${this.enabledSymbols.size} enabled OTC pair(s):`,
-        [...this.enabledSymbols].join(', ') || '(none)');
-  }
-
-  // ── Discovery ("جلب الأزواج") ───────────────────────────────────────────────
+  // ── Discovery ("جلب الأزواج") — collect asset frames for a few seconds ──────
   async runScan() {
     if (this._scanning) return;
-    this._scanning   = true;
-    this._scanAssets = [];
-    log('scan: discovering OTC pairs…');
+    this._scanning = true; this._scanAssets = [];
+    log('scan: collecting OTC asset list from the feed…');
     await this._reportScan({ status: 'scanning', message: 'جاري البحث عن الأزواج…' });
-
     try {
-      if (!this.ready) throw new Error('session not ready');
-      // Open the assets panel so PO emits its asset catalogue frame + renders DOM.
-      try {
-        await this.page.evaluate(() => {
-          const opener = document.querySelector(
-            '.current-symbol, .asset-select, .pair-number-wrap, [data-test="asset-select"]'
-          );
-          if (opener) opener.click();
-        });
-      } catch (_) {}
-
-      // Collect for a few seconds from both the websocket frames and the DOM.
-      const waitMs = 6000;
-      const start  = Date.now();
-      while (Date.now() - start < waitMs) {
-        await new Promise(r => setTimeout(r, 500));
-      }
-      const domAssets = await this.adapter.discoverAssetsFromDom(this.page);
-      for (const a of domAssets) {
-        const symbol = this.adapter.normalize(a.raw || a.label);
-        if (symbol && !this._scanAssets.some(x => x.symbol === symbol)) {
-          this._scanAssets.push({ symbol, name: a.label && /\//.test(a.label)
-            ? a.label : this.adapter.displayName(symbol) });
+      const start = Date.now();
+      while (Date.now() - start < 7000) await new Promise(r => setTimeout(r, 500));
+      // Fallback: also offer any symbols we've already seen live prices for.
+      for (const sym of Object.keys(this.prices)) {
+        if (/OTC$/i.test(sym) && !this._scanAssets.some(x => x.symbol === sym)) {
+          this._scanAssets.push({ symbol: sym, name: this.proto.displayName(sym) });
         }
       }
-
-      const found = this._scanAssets;
-      log(`scan: found ${found.length} OTC pair(s)`);
-      await this._upsertLibrary(found);
-      await this._reportScan({
-        status: 'done', count: found.length,
-        message: `تم العثور على ${found.length} زوج`,
-      });
+      log(`scan: found ${this._scanAssets.length} OTC pair(s)`);
+      await this._upsertLibrary(this._scanAssets);
+      await this._reportScan({ status: 'done', count: this._scanAssets.length, message: `تم العثور على ${this._scanAssets.length} زوج` });
     } catch (e) {
       err('scan failed:', e.message);
       await this._reportScan({ status: 'error', message: e.message });
-    } finally {
-      this._scanning = false;
-    }
+    } finally { this._scanning = false; }
   }
 
   async _upsertLibrary(assets) {
     if (!db || !assets.length) return;
-    // Upsert on (platform,symbol). We intentionally DON'T send `enabled`,
-    // `subcategory` or `order` so a re-scan never clobbers the admin's choices
-    // (PostgREST only updates the columns we provide). New rows get the table
-    // defaults (enabled=false, subcategory='forex', order=0).
-    const rows = assets.map((a) => ({
-      platform:   this.adapter.id,
-      symbol:     a.symbol,
-      name:       a.name || this.adapter.displayName(a.symbol),
-      updated_at: new Date().toISOString(),
+    const rows = assets.map(a => ({
+      platform: this.proto.id, symbol: a.symbol,
+      name: a.name || this.proto.displayName(a.symbol), updated_at: new Date().toISOString(),
     }));
-    const { error } = await db.from('otc_pairs')
-      .upsert(rows, { onConflict: 'platform,symbol', ignoreDuplicates: false });
+    const { error } = await db.from('otc_pairs').upsert(rows, { onConflict: 'platform,symbol', ignoreDuplicates: false });
     if (error) err('library upsert:', error.message);
     else log(`library: upserted ${rows.length} pair(s)`);
   }
@@ -1125,97 +734,86 @@ class OtcEngine {
     try {
       const { data } = await db.from('configs').select('data').eq('id', 'otc_scan').single();
       const cur = (data && data.data) || {};
-      await db.from('configs').update({
-        data: { ...cur, ...patch, updatedAt: new Date().toISOString() },
-      }).eq('id', 'otc_scan');
+      await db.from('configs').update({ data: { ...cur, ...patch, updatedAt: new Date().toISOString() } }).eq('id', 'otc_scan');
     } catch (_) {}
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  Control plane — Supabase realtime wiring
+//  Control plane
 // ════════════════════════════════════════════════════════════════════════════
 async function loadEnabledSymbols() {
   if (!db) return [];
-  const { data, error } = await db.from('otc_pairs')
-    .select('symbol, platform, enabled').eq('enabled', true);
+  const { data, error } = await db.from('otc_pairs').select('symbol').eq('enabled', true);
   if (error) { err('load enabled:', error.message); return []; }
   return (data || []).map(r => r.symbol);
 }
 
-async function start() {
-  if (!PO_EMAIL || !PO_PASSWORD) {
-    warn('PO_EMAIL / PO_PASSWORD not set — OTC scraper disabled');
-    return;
-  }
-  const adapter = new PocketOptionAdapter();
-  const engine  = new OtcEngine(adapter);
-
-  // Boot the persistent session once; on failure the smart-backoff scheduler
-  // (5s → 15s → 60s) takes over so we never hammer PO into a block.
+// Persist / restore the auto-recaptured token so a restart reuses the freshest
+// one instead of falling back to the (possibly stale) env value.
+async function loadToken() {
+  if (!db) return;
   try {
-    await engine.launch();
-  } catch (e) {
-    engine.loginFails++;
-    err(`boot failed: ${e.message}`);
-    await engine._reportStatus({ connected: false, loggedIn: false, lastError: e.message });
-    engine._scheduleReconnect('initial boot failed');
-  }
+    const { data } = await db.from('configs').select('data').eq('id', 'otc_token').maybeSingle();
+    const t = data && data.data;
+    if (t && t.auth) {
+      activeAuth = t.auth;
+      if (t.wsUrl) activeWsUrl = t.wsUrl;
+      log('restored saved session token (captured ' + (t.capturedAt || '?') + ')');
+    }
+  } catch (_) {}
+}
+async function saveToken(auth, wsUrl) {
+  if (!db) return;
+  try {
+    await db.from('configs').upsert({
+      id: 'otc_token',
+      data: { auth, wsUrl: wsUrl || activeWsUrl, capturedAt: new Date().toISOString() },
+    });
+  } catch (e) { err('saveToken:', e.message); }
+}
 
-  // Apply currently-enabled pairs + hydrate their candle history.
+async function start() {
+  await loadToken();             // prefer the freshest persisted token over env
+  const client = new PoWsClient(PoProtocol);
+  client.start();
+  client.startHttpKeepAlive();   // optional 2nd keep-alive channel (if configured)
+
   const enabled = await loadEnabledSymbols();
-  engine.applyEnabled(enabled);
-  await engine.store.hydrate(enabled);
+  client.applyEnabled(enabled);
+  await client.store.hydrate(enabled);
 
-  // Per-second candle tick (24/7, independent of connected users).
-  setInterval(() => engine.tickAll(), PRICE_MS);
+  setInterval(() => client.tickAll(), PRICE_MS);
 
-  // Health check + auto-reconnect every minute.
-  setInterval(() => engine.healthCheck(), HEALTH_MS);
-
-  // Self-healing DOM price fallback for any pair whose WS feed went stale.
-  setInterval(() => engine.domFallback(), 3000);
-
-  // Pre-emptive memory guard (restart browser before OOM) every minute.
-  setInterval(() => engine.memoryGuard(), HEALTH_MS);
-
-  // Realtime: react to enable/disable + new pairs in the library.
   if (db) {
     db.channel('otc-pairs-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'otc_pairs' },
-        async () => {
-          const syms = await loadEnabledSymbols();
-          engine.applyEnabled(syms);
-          await engine.store.hydrate(syms);
-        })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'otc_pairs' }, async () => {
+        const syms = await loadEnabledSymbols();
+        client.applyEnabled(syms);
+        await client.store.hydrate(syms);
+      })
       .subscribe(s => { if (s === 'SUBSCRIBED') log('otc_pairs realtime active'); });
 
-    // Realtime: admin "جلب الأزواج" → configs/otc_scan.requestedAt changes.
     let lastScanReq = null;
     db.channel('otc-scan-trigger')
-      .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'configs', filter: 'id=eq.otc_scan' },
-        payload => {
-          const req = payload.new && payload.new.data && payload.new.data.requestedAt;
-          if (req && req !== lastScanReq) { lastScanReq = req; engine.runScan(); }
-        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'configs', filter: 'id=eq.otc_scan' }, payload => {
+        const req = payload.new && payload.new.data && payload.new.data.requestedAt;
+        if (req && req !== lastScanReq) { lastScanReq = req; client.runScan(); }
+      })
       .subscribe(s => { if (s === 'SUBSCRIBED') log('otc_scan realtime active'); });
 
-    // Catch a scan requested while we were booting.
     try {
       const { data } = await db.from('configs').select('data').eq('id', 'otc_scan').single();
       const req = data && data.data && data.data.requestedAt;
-      const status = data && data.data && data.data.status;
-      if (req && status === 'requested') { lastScanReq = req; engine.runScan(); }
+      if (req && data.data.status === 'requested') { lastScanReq = req; client.runScan(); }
     } catch (_) {}
   }
 
-  log('OTC scraper started');
+  log('OTC scraper (direct WebSocket) started');
 }
 
-module.exports = { start, PocketOptionAdapter, CandleStore, OtcEngine };
+module.exports = { start, PoWsClient, PoProtocol, CandleStore };
 
-// Auto-start when run/required directly (start.js requires this module).
 if (require.main === module || process.env.OTC_AUTOSTART !== '0') {
   start().catch(e => err('fatal:', e.message));
 }
