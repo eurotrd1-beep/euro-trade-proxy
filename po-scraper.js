@@ -149,15 +149,21 @@ class PocketOptionAdapter {
   async isLoggedIn(page) {
     try {
       const url = page.url() || '';
-      if (/login|sign-in/i.test(url)) return false;
-      // Logged-in cabinet pages expose a balance / cabinet container.
-      return await page.evaluate(() => {
+      if (/\/login|sign-in|\/auth|\/registration/i.test(url)) return false;
+      // Logged-in cabinet pages expose a balance / cabinet / deposit element.
+      const bySelector = await page.evaluate(() => {
         const sel = [
           '.balance-info-block', '.js-balance-demo', '.balance__value',
           '[data-test="balance"]', '.deposit-button', '.cabinet',
+          '.right-block__balance', '.balance', '.user-block', '.tour-balance',
+          '.js-hd-balance', '.deposit-block',
         ];
         return sel.some(s => document.querySelector(s));
-      });
+      }).catch(() => false);
+      if (bySelector) return true;
+      // Fallback: a cabinet/trade URL that isn't the login page ⇒ we have a
+      // session (covers selector drift on the chart page).
+      return /cabinet|quick-high-low|quick-fixed-time|trade|demo|profile/i.test(url);
     } catch (_) { return false; }
   }
 
@@ -165,7 +171,10 @@ class PocketOptionAdapter {
     if (!PO_EMAIL || !PO_PASSWORD) {
       throw new Error('PO_EMAIL / PO_PASSWORD not set');
     }
-    await page.goto(this.loginUrl, { waitUntil: 'networkidle2', timeout: 60_000 });
+    // 'domcontentloaded' — PO keeps live sockets open so 'networkidle2' never
+    // fires and would burn the full timeout. Then let the SPA render the form.
+    await page.goto(this.loginUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await new Promise(r => setTimeout(r, 3500));
 
     // Detect an IP block / bot-challenge page (state 12) — distinct from a
     // credential failure, so the client + admin alert can say the right thing.
@@ -190,15 +199,16 @@ class PocketOptionAdapter {
         );
         if (btn) btn.click();
       }),
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60_000 }).catch(() => {}),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {}),
     ]);
 
-    // Give SPA a moment, then verify.
-    await page.waitForTimeout ? await page.waitForTimeout(3000)
-                              : await new Promise(r => setTimeout(r, 3000));
-    if (!(await this.isLoggedIn(page))) {
-      throw new Error('login verification failed (still not in cabinet)');
+    // Verify with a few retries — PO redirects through a couple of pages after
+    // login and the cabinet/balance can take a moment to render.
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await new Promise(r => setTimeout(r, 3000));
+      if (await this.isLoggedIn(page)) return;
     }
+    throw new Error('login verification failed (still not in cabinet)');
   }
 
   // PO uses a socket.io style feed. Frames look roughly like:
@@ -670,6 +680,8 @@ class OtcEngine {
     }
   }
 
+  _settle(ms) { return new Promise(r => setTimeout(r, ms)); }
+
   // ── Browser lifecycle ──────────────────────────────────────────────────────
   async launch() {
     if (!puppeteer) throw new Error('no puppeteer runtime available');
@@ -687,17 +699,18 @@ class OtcEngine {
       headless = chromium.headless ?? true;
     }
 
+    // IMPORTANT: deliberately NO --single-process / --no-zygote /
+    // --disable-features=site-per-process / --max-old-space-size. Those crash
+    // Chromium ("browser disconnected") on Pocket Option's heavy SPA. The
+    // @sparticuz/chromium args + request blocking already keep memory low.
     const ramArgs = [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu', '--no-zygote', '--single-process',
-      '--disable-blink-features=AutomationControlled',
+      '--disable-gpu', '--disable-blink-features=AutomationControlled',
       '--disable-extensions', '--disable-background-networking',
       '--disable-background-timer-throttling', '--disable-default-apps',
       '--disable-sync', '--disable-translate', '--mute-audio',
       '--no-first-run', '--no-default-browser-check',
-      '--disable-software-rasterizer', '--disable-features=site-per-process',
-      '--js-flags=--max-old-space-size=256',
-      '--window-size=900,600',
+      '--disable-software-rasterizer', '--window-size=900,600',
     ];
     // De-dup (chromium.args may already contain some of these).
     const argSet = new Set([...baseArgs, ...ramArgs]);
@@ -771,8 +784,11 @@ class OtcEngine {
     // PO sometimes wraps payloads in the *sent* direction too; harmless to ignore.
 
     // Go to the chart page; if it bounces to login, authenticate then return.
-    await this.page.goto(this.adapter.chartUrl, { waitUntil: 'networkidle2', timeout: 60_000 })
+    // Use 'domcontentloaded' (PO's SPA keeps sockets open and never reaches
+    // networkidle, which would waste the full 60s timeout every navigation).
+    await this.page.goto(this.adapter.chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
       .catch(() => {});
+    await this._settle(4000);
 
     if (!(await this.adapter.isLoggedIn(this.page))) {
       log('not logged in — authenticating…');
@@ -781,8 +797,9 @@ class OtcEngine {
       await this.adapter.login(this.page);
       this.loginFails = 0;
       log('login OK — opening chart page');
-      await this.page.goto(this.adapter.chartUrl, { waitUntil: 'networkidle2', timeout: 60_000 })
+      await this.page.goto(this.adapter.chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 })
         .catch(() => {});
+      await this._settle(4000);
     } else {
       log('already logged in');
     }
