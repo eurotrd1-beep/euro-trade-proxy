@@ -12,7 +12,7 @@ const puppeteer = require('puppeteer');
 const https = require('https');
 const fs = require('fs');
 
-const PROXY_HOST = 'euro-trade-proxy.onrender.com';
+const PROXY_HOST = 'euro-trade-proxy-1.onrender.com';
 const LOGIN_URL  = 'https://pocketoption.com/en/login';
 
 // Find system Chrome on Windows
