@@ -386,9 +386,17 @@ class PoWsClient {
 
     // Socket.IO connected → send auth, then subscribe to enabled symbols.
     if (msg.startsWith('40')) {
+      // Mimic the real browser's post-auth burst EXACTLY (auth → loads → subscribe
+      // → ps), sent immediately without waiting — PO drops "incomplete" sessions.
       const af = this.buildAuthFrame();
-      if (af) { try { this.ws.send(af); log('auth frame sent'); } catch (_) {} }
-      return;   // subscribe right after auth is confirmed (first data) — see _ingest
+      if (af) this._send(af);
+      this._send('42["indicator/load"]');
+      this._send('42["favorite/load"]');
+      this._send('42["price-alert/load"]');
+      this._subscribeAll();                 // changeSymbol + subfor per enabled symbol
+      this._send('42["ps"]');
+      log('auth + init sequence + subscribe sent');
+      return;
     }
 
     // Socket.IO event / ack ("42[...]", "451-[...]", "43[...]" …).
@@ -419,8 +427,6 @@ class PoWsClient {
         this._authedAt = Date.now();
         this._reportStatus({ connected: true, loggedIn: true, phase: 'live' });
         log('authenticated — receiving live data ✅');
-        this._subscribeAll();         // subscribe immediately (mimic the real client)
-        this._send('42["ps"]');       // and ping right away so we don't look idle
         this._startHeartbeat();       // keep the session "active"
         this._startWatchdog();        // detect a silent death even while "connected"
       }
