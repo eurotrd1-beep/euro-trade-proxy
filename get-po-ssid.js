@@ -2,46 +2,36 @@
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  *  Pocket Option session + WebSocket capture  —  RUN THIS ON YOUR OWN PC
- *  (NOT on Render). It opens Chrome, you log in to Pocket Option, and it
- *  captures everything the browser-free scraper needs:
- *     • PO_WS_URL  — the real websocket URL PO uses
- *     • PO_AUTH    — the auth handshake frame (your session token)
- *     • sample price/asset frames — so the scraper can be tuned to PO's format
+ *  (NOT on Render). Opens Chrome, you log in, and it captures what the
+ *  browser-free scraper needs for the PRICE server (api-*.po.market):
+ *     • PO_WS_URL  — the price websocket URL
+ *     • PO_AUTH    — the FULL price-server auth frame  (your session token)
+ *     • decoded sample frames — so the parser can be verified against PO
  *
- *  SETUP (one time), in a terminal in this folder:
- *     npm install puppeteer
- *     node get-po-ssid.js
- *
- *  Then: log in to Pocket Option in the window that opens, open any chart,
- *  wait ~20 seconds, come back here and press ENTER.
- *  It prints PO_WS_URL and PO_AUTH (set those on Render) and saves a file
- *  `po-capture.json` — send that file's contents back so the scraper can be
- *  finished to match PO exactly.
+ *  SETUP (one time):  npm install puppeteer   then   node get-po-ssid.js
+ *  Log in, open a chart, wait ~20s, press ENTER. Copy PO_WS_URL + PO_AUTH to
+ *  Render, and send po-capture.json back.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 const fs = require('fs');
 let puppeteer;
 try { puppeteer = require('puppeteer'); }
-catch (_) {
-  console.error('Puppeteer not installed. Run:  npm install puppeteer');
-  process.exit(1);
-}
+catch (_) { console.error('Run:  npm install puppeteer'); process.exit(1); }
 
 const LOGIN_URL = 'https://pocketoption.com/en/login/';
+const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
 
 (async () => {
   console.log('Opening Chrome… log in to Pocket Option, open a chart, then come back.');
   const browser = await puppeteer.launch({ headless: false, defaultViewport: null });
   const page = (await browser.pages())[0] || await browser.newPage();
-
   const cdp = await page.target().createCDPSession();
   await cdp.send('Network.enable');
 
-  const wsUrls   = {};       // requestId → url
-  let   authSent = null;     // captured ["auth",{...}] frame
-  const recvSamples = [];    // sample received frames
-  const sentSamples = [];    // sample sent frames
+  const wsUrls = {};            // requestId → url
+  const authFrames = [];        // {url, frame}
+  const recvSamples = [];       // decoded sample received frames
 
   cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
     wsUrls[requestId] = url;
@@ -50,41 +40,50 @@ const LOGIN_URL = 'https://pocketoption.com/en/login/';
 
   cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
     const d = (response && response.payloadData) || '';
-    if (/"auth"/.test(d) && !authSent) {
-      authSent = d;
-      console.log('\n✅ [AUTH frame captured]\n' + d + '\n');
+    if (/"auth"/.test(d)) {
+      const url = wsUrls[requestId] || '';
+      if (!authFrames.some(a => a.url === url)) {
+        authFrames.push({ url, frame: d });
+        console.log('\n[auth frame on ' + url + ']\n' + d + '\n');
+      }
     }
-    if (sentSamples.length < 15) sentSamples.push({ url: wsUrls[requestId], d: String(d).slice(0, 400) });
   });
 
   cdp.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
-    const d = (response && response.payloadData) || '';
-    // Keep frames that look like prices / assets / streams.
-    if (recvSamples.length < 60 &&
-        /otc|updatestream|asset|stream|\d+\.\d{2,}/i.test(String(d))) {
-      recvSamples.push({ url: wsUrls[requestId], d: String(d).slice(0, 400) });
+    if (recvSamples.length >= 60) return;
+    const url = wsUrls[requestId] || '';
+    let d = (response && response.payloadData) || '';
+    // opcode 2 = binary → CDP gives base64; decode to UTF-8 (PO's binary is JSON).
+    if (response && response.opcode === 2) {
+      try { d = Buffer.from(d, 'base64').toString('utf8'); } catch (_) {}
+    }
+    if (/otc|updatestream|updateassets|asset|history|\d+\.\d{2,}/i.test(String(d))) {
+      recvSamples.push({ url, binary: response && response.opcode === 2, d: String(d).slice(0, 600) });
     }
   });
 
   await page.goto(LOGIN_URL).catch(() => {});
-
   console.log('\n>>> Log in, open a chart, wait ~20s, then press ENTER here <<<\n');
   await new Promise((resolve) => {
     const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
     rl.question('', () => { rl.close(); resolve(); });
   });
 
-  const wsUrl = Object.values(wsUrls).find(u => /po\.market|socket\.io/i.test(u))
-             || Object.values(wsUrls)[0] || '(not found)';
+  // Prefer the auth sent to the PRICE api server (contains "session"); fall back.
+  const priceAuth = authFrames.find(a => isPriceApi(a.url) && /"session"/.test(a.frame))
+                 || authFrames.find(a => isPriceApi(a.url))
+                 || authFrames[0];
+  const wsUrl = (priceAuth && isPriceApi(priceAuth.url) ? priceAuth.url : null)
+             || Object.values(wsUrls).find(isPriceApi)
+             || '(not found — keep a chart open longer and retry)';
 
   console.log('\n══════════════ COPY THESE TO RENDER → Environment ══════════════');
   console.log('PO_WS_URL =', wsUrl);
-  console.log('PO_AUTH   =', authSent ? authSent.replace(/^\d+/, '') : '(not found — keep the chart open longer and retry)');
+  console.log('PO_AUTH   =', priceAuth ? priceAuth.frame.replace(/^\d+/, '') : '(not found)');
   console.log('════════════════════════════════════════════════════════════════\n');
 
-  const out = { capturedAt: new Date().toISOString(), wsUrl, authSent, recvSamples, sentSamples, allWsUrls: wsUrls };
-  fs.writeFileSync('po-capture.json', JSON.stringify(out, null, 2));
-  console.log('📄 Saved po-capture.json — send its contents back to finish the scraper.\n');
-
+  fs.writeFileSync('po-capture.json', JSON.stringify(
+    { capturedAt: new Date().toISOString(), wsUrl, authFrames, recvSamples, allWsUrls: wsUrls }, null, 2));
+  console.log('📄 Saved po-capture.json — send its contents back to verify the parser.\n');
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

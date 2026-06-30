@@ -102,81 +102,89 @@ function ivToSeconds(iv) {
 const PoProtocol = {
   id: 'pocketoption',
 
-  // Canonical internal symbol: upper-case, no ':' (so the TV scraper's pairs
-  // listener — which only subscribes chart_symbols containing ':' — ignores it).
+  // id → symbol map, learned from updateAssets (live ticks may use numeric ids).
+  idMap: {},
+
+  // Internal symbol = PO's exact asset symbol with ':' stripped (NO upper-casing —
+  // PO uses lowercase "_otc", e.g. "EURUSD_otc", "#AAPL_otc"). No ':' means the
+  // TradingView pairs-listener always ignores it.
   normalize(raw) {
-    if (!raw || typeof raw !== 'string') return null;
-    const s = raw.trim().replace(/[:\s]/g, '').toUpperCase();
+    if (raw == null) return null;
+    const s = String(raw).trim().replace(/[:\s]/g, '');
     return s || null;
   },
 
   displayName(symbol) {
-    const base = symbol.replace(/_?OTC$/i, '');
-    if (base.length === 6) return `${base.slice(0, 3)}/${base.slice(3)} OTC`;
+    const base = symbol.replace(/^#/, '').replace(/_?otc$/i, '');
+    if (/^[A-Za-z]{6}$/.test(base)) return `${base.slice(0, 3)}/${base.slice(3)} OTC`.toUpperCase().replace('OTC', 'OTC');
     return `${base} OTC`;
   },
 
   expectedDecimals(symbol) { return /JPY/i.test(symbol) ? 3 : 5; },
 
-  // Parse one decoded socket.io event payload → { prices:{sym:price}, assets:[] }.
+  // Parse one decoded payload (from a text "42[...]" event OR a binary frame) →
+  // { prices:{sym:price}, assets:[{symbol,name}] }.
+  //  • updateAssets : [[id,"SYM","Name","type",...], …]        → asset catalogue + idMap
+  //  • history      : {asset:"SYM", period, history:[[ts,price],…]} → last price
+  //  • live stream  : [["SYM"|id, ts, price], …]                 → tick prices
   parse(node) {
     const out = { prices: {}, assets: [] };
-    let event = null, body = node;
-    if (Array.isArray(node) && typeof node[0] === 'string') { event = node[0]; body = node[1]; }
-    if (/asset/i.test(event || '') || this._looksLikeAssetList(body)) this._collectAssets(body, out.assets);
+    let body = node;
+    if (Array.isArray(node) && typeof node[0] === 'string') body = node[1]; // ["event",payload]
+
+    // history object: {asset, history:[[ts,price],...]}
+    if (body && typeof body === 'object' && !Array.isArray(body) && Array.isArray(body.history)) {
+      const sym = this.normalize(body.asset || body.symbol);
+      const h = body.history;
+      const last = h.length ? h[h.length - 1] : null;
+      if (sym && last && typeof last[1] === 'number' && last[1] > 0) out.prices[sym] = last[1];
+      return out;
+    }
+
+    // asset catalogue: array of [id, "SYM", "Name", "type", ...]
+    if (this._looksLikeAssetList(body)) {
+      for (const a of body) {
+        if (!Array.isArray(a) || a.length < 3) continue;
+        const id = a[0];
+        const symRaw = typeof a[1] === 'string' ? a[1] : null;
+        if (!symRaw) continue;
+        const symbol = this.normalize(symRaw);
+        if (typeof id === 'number' && symbol) this.idMap[id] = symbol;
+        if (/otc/i.test(symRaw)) {
+          const name = (typeof a[2] === 'string' && a[2]) ? a[2] : this.displayName(symbol);
+          if (!out.assets.some(x => x.symbol === symbol)) out.assets.push({ symbol, name });
+        }
+      }
+      return out;
+    }
+
     this._collectPrices(body, out.prices);
     return out;
   },
 
   _looksLikeAssetList(body) {
-    return Array.isArray(body) && body.length > 5 && Array.isArray(body[0]) &&
-           body[0].some(v => typeof v === 'string' && /otc/i.test(v));
+    return Array.isArray(body) && body.length > 3 && Array.isArray(body[0]) &&
+           body[0].length >= 4 && typeof body[0][1] === 'string';
   },
 
-  // Find [symbol, timestamp, price] tuples (and {asset/symbol, price} objects).
+  // Find [symbol|id, timestamp, price] tuples and {asset, price} objects.
   _collectPrices(node, acc, depth = 0) {
     if (depth > 6 || node == null) return;
     if (Array.isArray(node)) {
       if (node.length >= 3 &&
-          typeof node[0] === 'string' && /[a-z]/i.test(node[0]) &&
-          typeof node[1] === 'number' && typeof node[2] === 'number') {
-        const sym = this.normalize(node[0]);
-        if (sym && isFinite(node[2]) && node[2] > 0) acc[sym] = node[2];
-        return;
+          (typeof node[0] === 'string' || typeof node[0] === 'number') &&
+          typeof node[1] === 'number' && typeof node[2] === 'number' && node[2] > 0) {
+        let sym = typeof node[0] === 'string' ? this.normalize(node[0]) : this.idMap[node[0]];
+        if (sym) { acc[sym] = node[2]; return; }
       }
       for (const el of node) this._collectPrices(el, acc, depth + 1);
     } else if (typeof node === 'object') {
-      const sym = node.asset || node.symbol || node.s || node.active;
+      const symRaw = node.asset || node.symbol || node.s || node.active;
       const price = node.price ?? node.quote ?? node.value ?? node.close ?? node.c ?? node.rate;
-      if (typeof sym === 'string' && typeof price === 'number' && price > 0) {
-        const n = this.normalize(sym); if (n) acc[n] = price;
+      if (typeof symRaw === 'string' && typeof price === 'number' && price > 0) {
+        const n = this.normalize(symRaw); if (n) acc[n] = price;
       }
       for (const k of Object.keys(node)) this._collectPrices(node[k], acc, depth + 1);
-    }
-  },
-
-  _collectAssets(node, acc, depth = 0) {
-    if (depth > 5 || node == null) return;
-    if (Array.isArray(node)) {
-      const symLike = node.find(v => typeof v === 'string' && /otc/i.test(v));
-      if (symLike) {
-        const symbol = this.normalize(symLike);
-        const label  = node.find(v => typeof v === 'string' && /\//.test(v)) || null;
-        if (symbol && !acc.some(a => a.symbol === symbol)) {
-          acc.push({ symbol, name: label ? `${label} OTC` : this.displayName(symbol) });
-        }
-        return;
-      }
-      for (const el of node) this._collectAssets(el, acc, depth + 1);
-    } else if (typeof node === 'object') {
-      const sym = node.symbol || node.asset || node.active || node.id;
-      if (typeof sym === 'string' && /otc/i.test(sym)) {
-        const symbol = this.normalize(sym);
-        if (symbol && !acc.some(a => a.symbol === symbol)) {
-          acc.push({ symbol, name: node.name || node.label || this.displayName(symbol) });
-        }
-      }
-      for (const k of Object.keys(node)) this._collectAssets(node[k], acc, depth + 1);
     }
   },
 };
@@ -273,6 +281,7 @@ class PoWsClient {
     this._reconnectTimer = null;
     this._scanning = false;
     this._scanAssets = [];
+    this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
     this._lastPricesWrite = 0;
     this._unknownSamples = 0;
     this._phase = 'boot';
@@ -352,8 +361,16 @@ class PoWsClient {
   }
 
   _onMessage(data, isBinary) {
+    // PO sends live prices as Socket.IO BINARY attachments (the "451-[...]" text
+    // frame is the header; the real payload is the next binary frame). The binary
+    // frame is UTF-8 JSON — parse it and ingest.
     if (isBinary) {
-      if (this._unknownSamples < 6) { this._unknownSamples++; log('binary frame', data.length, 'bytes (sample for tuning)'); }
+      let txt; try { txt = data.toString('utf8'); } catch (_) { return; }
+      let parsed; try { parsed = JSON.parse(txt); } catch (_) {
+        if (this._unknownSamples < 8) { this._unknownSamples++; log('binary (non-json) sample:', txt.slice(0, 160)); }
+        return;
+      }
+      this._ingest(parsed, txt);
       return;
     }
     const msg = data.toString();
@@ -365,10 +382,11 @@ class PoWsClient {
     // Engine.IO open handshake → connect to default namespace.
     if (msg[0] === '0') { try { this.ws.send('40'); } catch (_) {} return; }
 
-    // Socket.IO connected → send auth.
+    // Socket.IO connected → send auth, then subscribe to enabled symbols.
     if (msg.startsWith('40')) {
       const af = this.buildAuthFrame();
       if (af) { try { this.ws.send(af); log('auth frame sent'); } catch (_) {} }
+      setTimeout(() => this._subscribeAll(), 1500);   // give the server a moment to accept auth
       return;
     }
 
@@ -382,11 +400,11 @@ class PoWsClient {
         if (this._unknownSamples < 10 && /otc/i.test(msg)) { this._unknownSamples++; log('unparsed event sample:', msg.slice(0, 220)); }
         return;
       }
-      this._handleEvent(parsed, msg);
+      this._ingest(parsed, msg);
     }
   }
 
-  _handleEvent(parsed, raw) {
+  _ingest(parsed, raw) {
     const res = this.proto.parse(parsed);
     const gotPrices = res && Object.keys(res.prices).length;
     const gotAssets = res && res.assets.length;
@@ -407,8 +425,10 @@ class PoWsClient {
       const now = Date.now();
       for (const [sym, price] of Object.entries(res.prices)) { this.prices[sym] = price; this._priceAt[sym] = now; }
     }
-    if (gotAssets && this._scanning) {
-      for (const a of res.assets) if (!this._scanAssets.some(x => x.symbol === a.symbol)) this._scanAssets.push(a);
+    if (gotAssets) {
+      // Cache the OTC asset catalogue (PO sends updateAssets on connect) so
+      // "جلب الأزواج" can list pairs any time, not only during a scan window.
+      for (const a of res.assets) this._assetMap.set(a.symbol, a);
     }
     // Sample a few events that yielded nothing — helps tune the parser to PO.
     if (!gotPrices && !gotAssets && this._unknownSamples < 10 && /otc|stream|asset|price/i.test(raw)) {
@@ -596,19 +616,34 @@ class PoWsClient {
   _beat() {
     if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
     this._beatCount++;
-    // 1) Engine.IO ping (proactive, on top of answering server pings).
+    // 1) Engine.IO ping + PO's app-level ping ("ps") — the real client's keep-alive.
     this._send('2');
-    // 2) Replay any real heartbeat frames captured from the browser.
+    this._send('42["ps"]');
+    // 2) Any extra captured heartbeat frames (override via PO_HEARTBEAT).
     for (const f of PO_HEARTBEAT) this._send(typeof f === 'string' ? f : JSON.stringify(f));
-    // 3) Actively use the session: (re)subscribe to every enabled symbol.
-    if (PO_SUBSCRIBE) {
-      for (const sym of this.enabled) this._send(PO_SUBSCRIBE.replace(/\{symbol\}/g, sym));
+    // 3) Actively "use" the session: re-subscribe to every enabled symbol.
+    for (const sym of this.enabled) {
+      this._send(PO_SUBSCRIBE ? PO_SUBSCRIBE.replace(/\{symbol\}/g, sym) : '42["subfor","' + sym + '"]');
     }
     // 4) Proactive session touch: re-auth occasionally (every ~10 beats).
     if (this._beatCount % 10 === 0) {
       const af = this.buildAuthFrame();
       if (af) this._send(af);
     }
+  }
+
+  // Subscribe to every enabled symbol the way the real client does:
+  //   42["changeSymbol",{"asset":SYM,"period":60}]  (loads history)
+  //   42["subfor",SYM]                              (live stream)
+  _subscribeAll() {
+    if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
+    const syms = [...this.enabled];
+    if (!syms.length) { log('no enabled OTC symbols to subscribe yet'); return; }
+    for (const sym of syms) {
+      this._send('42["changeSymbol",{"asset":"' + sym + '","period":60}]');
+      this._send('42["subfor","' + sym + '"]');
+    }
+    log('subscribed to', syms.length, 'OTC symbol(s):', syms.join(', '));
   }
 
   // Optional 2nd keep-alive channel: periodic HTTPS GET with the session cookie,
@@ -671,6 +706,7 @@ class PoWsClient {
   applyEnabled(symbols) {
     this.enabled = new Set(symbols);
     log(`tracking ${this.enabled.size} enabled OTC pair(s):`, [...this.enabled].join(', ') || '(none)');
+    if (this.authed) this._subscribeAll();   // subscribe newly-enabled symbols live
   }
 
   async _reportStatus(patch) {
@@ -694,24 +730,29 @@ class PoWsClient {
     } catch (_) {}
   }
 
-  // ── Discovery ("جلب الأزواج") — collect asset frames for a few seconds ──────
+  // ── Discovery ("جلب الأزواج") — from the cached updateAssets catalogue ──────
   async runScan() {
     if (this._scanning) return;
-    this._scanning = true; this._scanAssets = [];
-    log('scan: collecting OTC asset list from the feed…');
+    this._scanning = true;
+    log('scan: listing OTC pairs from the asset catalogue…');
     await this._reportScan({ status: 'scanning', message: 'جاري البحث عن الأزواج…' });
     try {
+      // The catalogue arrives on connect; if a scan is requested before it lands,
+      // wait briefly for it.
       const start = Date.now();
-      while (Date.now() - start < 7000) await new Promise(r => setTimeout(r, 500));
-      // Fallback: also offer any symbols we've already seen live prices for.
+      while (this._assetMap.size === 0 && Date.now() - start < 8000) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+      const found = [...this._assetMap.values()];
+      // Also include any OTC symbols we've already seen live prices for.
       for (const sym of Object.keys(this.prices)) {
-        if (/OTC$/i.test(sym) && !this._scanAssets.some(x => x.symbol === sym)) {
-          this._scanAssets.push({ symbol: sym, name: this.proto.displayName(sym) });
+        if (/otc/i.test(sym) && !found.some(x => x.symbol === sym)) {
+          found.push({ symbol: sym, name: this.proto.displayName(sym) });
         }
       }
-      log(`scan: found ${this._scanAssets.length} OTC pair(s)`);
-      await this._upsertLibrary(this._scanAssets);
-      await this._reportScan({ status: 'done', count: this._scanAssets.length, message: `تم العثور على ${this._scanAssets.length} زوج` });
+      log(`scan: found ${found.length} OTC pair(s)`);
+      await this._upsertLibrary(found);
+      await this._reportScan({ status: 'done', count: found.length, message: `تم العثور على ${found.length} زوج` });
     } catch (e) {
       err('scan failed:', e.message);
       await this._reportScan({ status: 'error', message: e.message });
@@ -776,12 +817,14 @@ async function saveToken(auth, wsUrl) {
 async function start() {
   await loadToken();             // prefer the freshest persisted token over env
   const client = new PoWsClient(PoProtocol);
-  client.start();
-  client.startHttpKeepAlive();   // optional 2nd keep-alive channel (if configured)
 
+  // Know which symbols to subscribe BEFORE connecting.
   const enabled = await loadEnabledSymbols();
   client.applyEnabled(enabled);
   await client.store.hydrate(enabled);
+
+  client.start();
+  client.startHttpKeepAlive();   // optional 2nd keep-alive channel (if configured)
 
   setInterval(() => client.tickAll(), PRICE_MS);
 
