@@ -279,6 +279,8 @@ class PoWsClient {
     this.reconnects = 0;
     this._reconnecting = false;
     this._reconnectTimer = null;
+    this._authedAt = 0;       // when the current session authed (for flap detection)
+    this._flaps = 0;          // consecutive "authed then dropped fast" cycles
     this._scanning = false;
     this._scanAssets = [];
     this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
@@ -386,8 +388,7 @@ class PoWsClient {
     if (msg.startsWith('40')) {
       const af = this.buildAuthFrame();
       if (af) { try { this.ws.send(af); log('auth frame sent'); } catch (_) {} }
-      setTimeout(() => this._subscribeAll(), 1500);   // give the server a moment to accept auth
-      return;
+      return;   // subscribe right after auth is confirmed (first data) — see _ingest
     }
 
     // Socket.IO event / ack ("42[...]", "451-[...]", "43[...]" …).
@@ -415,10 +416,13 @@ class PoWsClient {
       this._staleChecks = 0;
       if (!this.authed) {
         this.authed = true; this.loginFails = 0; this._repairFails = 0;
+        this._authedAt = Date.now();
         this._reportStatus({ connected: true, loggedIn: true, phase: 'live' });
         log('authenticated — receiving live data ✅');
-        this._startHeartbeat();   // keep the session "active" so the token never idles out
-        this._startWatchdog();    // detect a silent death even while "connected"
+        this._subscribeAll();         // subscribe immediately (mimic the real client)
+        this._send('42["ps"]');       // and ping right away so we don't look idle
+        this._startHeartbeat();       // keep the session "active"
+        this._startWatchdog();        // detect a silent death even while "connected"
       }
     }
     if (gotPrices) {
@@ -438,26 +442,50 @@ class PoWsClient {
 
   _onClose(code) {
     const wasAuthed = this.authed;
+    const aliveMs = (wasAuthed && this._authedAt) ? (Date.now() - this._authedAt) : 0;
     this.connected = false; this.authed = false;
     this._clearWs();
-    if (!wasAuthed) this.loginFails++;   // closed before any data ⇒ likely bad/expired token
-    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, fails=${this.loginFails})`);
-    const phase = (!wasAuthed && this.loginFails >= MAX_LOGIN_FAILS) ? 'login_failed' : 'reconnecting';
-    this._reportStatus({ connected: false, loggedIn: false, phase });
-    if (phase === 'login_failed') {
-      err('🟥🟥🟥 ADMIN ACTION REQUIRED — OTC TOKEN INVALID/EXPIRED 🟥🟥🟥');
-      err('PO closed the socket before sending data — the session token (PO_AUTH) is likely expired.');
-      err('Re-capture it with get-po-ssid.js and update PO_AUTH on Render. (TradingView keeps working.)');
-      err('🟥🟥🟥────────────────────────────────────────────────🟥🟥🟥');
+
+    let delay, phase;
+    if (!wasAuthed) {
+      // Closed before any data ⇒ token rejected/expired.
+      this.loginFails++;
+      delay = this._backoffMs();
+      phase = this.loginFails >= MAX_LOGIN_FAILS ? 'login_failed' : 'reconnecting';
+    } else if (aliveMs < 6000) {
+      // Authed then dropped almost immediately = FLAPPING. Classic sign the SAME
+      // PO session is in use elsewhere (your browser), or PO is dropping us. Back
+      // off progressively so we never hammer PO (avoids an IP/session block).
+      this._flaps++;
+      delay = Math.min(60000, 5000 * this._flaps);
+      phase = this._flaps >= 5 ? 'login_failed' : 'reconnecting';
+    } else {
+      // Had a healthy session that dropped → quick, normal reconnect.
+      this._flaps = 0;
+      delay = 1000;
+      phase = 'reconnecting';
     }
-    this._scheduleReconnect();
+
+    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, aliveMs=${aliveMs}, flaps=${this._flaps})`);
+    this._reportStatus({ connected: false, loggedIn: false, phase });
+
+    if (!wasAuthed && this.loginFails === MAX_LOGIN_FAILS) {
+      err('🟥 OTC: token rejected before any data — PO_AUTH likely expired. Re-capture with get-po-ssid.js.');
+    }
+    if (this._flaps === 5) {
+      err('🟧🟧🟧 OTC: connection keeps dropping right after auth (flapping) 🟧🟧🟧');
+      err('Almost always: the SAME Pocket Option session is open elsewhere (your browser).');
+      err('→ Log out of Pocket Option in your browser / close all PO tabs. Backing off now.');
+      err('🟧🟧🟧──────────────────────────────────────────────────────🟧🟧🟧');
+    }
+    this._scheduleReconnect(delay);
   }
 
-  _scheduleReconnect() {
+  _scheduleReconnect(delayMs) {
     if (this._reconnectTimer) return;
-    const delay = this._backoffMs();
+    const delay = delayMs || this._backoffMs();
     this.reconnects++;
-    warn(`reconnect #${this.reconnects} in ${Math.round(delay / 1000)}s (fails=${this.loginFails})`);
+    warn(`reconnect #${this.reconnects} in ${Math.round(delay / 1000)}s`);
     this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this._connect(); }, delay);
   }
 
