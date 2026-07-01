@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-1';
+const BUILD = '2captcha-2';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -784,10 +784,16 @@ class PoWsClient {
     log('recapture stage:', stage);
     if (!db) return;
     try {
+      const now = new Date().toISOString();
       const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
       const cur = (data && data.data) || {};
+      // Keep a bounded trail of the LAST stages so the whole login attempt
+      // (solving-recaptcha → captcha-solved → LOGIN-OK / rejected) is visible
+      // in a single snapshot — repairDiag alone only shows the latest step.
+      const trail = Array.isArray(cur.repairTrail) ? cur.repairTrail.slice(-11) : [];
+      trail.push(now.slice(11, 19) + ' ' + stage);
       await db.from('configs').update({
-        data: { ...cur, repairDiag: stage, repairStageAt: new Date().toISOString() },
+        data: { ...cur, repairDiag: stage, repairStageAt: now, repairTrail: trail },
       }).eq('id', 'otc_status');
     } catch (_) {}
   }
@@ -984,8 +990,13 @@ class PoWsClient {
     if (patch.diag) this._diag = patch.diag;
     if (!db) return;
     try {
+      // Merge with the current row so we DON'T wipe fields other writers own
+      // (cfg from boot, repairTrail/repairStageAt from _reportRepair).
+      const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
+      const cur = (data && data.data) || {};
       await db.from('configs').update({
         data: {
+          ...cur,
           connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
           phaseSince: this._phaseSince, diag: this._diag || '', repairDiag: this._repairDiag || '',
           reconnects: this.reconnects, lastError: patch.lastError || '',
