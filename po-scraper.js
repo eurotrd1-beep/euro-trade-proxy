@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-9';
+const BUILD = 'browser-1';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -641,11 +641,13 @@ class PoWsClient {
     this._reportStatus({ connected: false, loggedIn: false, phase: 'repairing' });
     log('self-repair: minting a server-IP token…');
     try {
-      // Free path: raw HTTP login (no browser). Browser fallback is disabled for
-      // now — a fresh headless login hits reCAPTCHA anyway, and it muddies the
-      // repairDiag. Re-enable later if needed.
-      const ok = await this.httpLogin();
-      if (!ok) throw new Error('httpLogin produced no token');
+      // PO's login is anti-bot protected (Qrator TLS fingerprint + JS-generated
+      // token), so raw httpLogin() is silently rejected even with a solved
+      // captcha. A REAL (stealth) browser passes it — mint the server-IP token
+      // that way. Falls back to httpLogin only if the browser deps are missing.
+      let ok = await this.recaptureToken();
+      if (!ok) { await this._reportRepair('browser-failed → trying httpLogin'); ok = await this.httpLogin(); }
+      if (!ok) throw new Error('no token (browser + httpLogin both failed)');
       this._repairFails = 0; this._repairOpenUntil = 0;
       this._health.repairs++; this._health.lastRepairAt = new Date().toISOString();
       log('self-repair OK ✅ — reconnecting with fresh token');
@@ -890,17 +892,25 @@ class PoWsClient {
     } catch (_) {}
   }
 
-  // Temporary, login-only browser "strike": open → log in → grab the new auth
-  // frame via CDP → close immediately. Kept short + resource-blocked to minimise
-  // RAM (it is NOT a persistent browser).
+  // Temporary, login-only browser "strike": open → log in (a REAL browser runs
+  // PO's JS + reCAPTCHA and has a genuine TLS fingerprint, so it passes the
+  // anti-bot that blocks raw HTTP) → grab the server-IP session (WS auth frame
+  // AND/OR the ci_session cookie) → close immediately. Stealth-hardened + heavy
+  // resources blocked + single-process to fit Render's 512 MB for a short strike.
   async recaptureToken() {
     if (!PO_EMAIL || !PO_PASSWORD) { warn('auto-recapture needs PO_EMAIL/PO_PASSWORD'); return false; }
     let puppeteer, chromium, browser = null;
     try {
       chromium = require('@sparticuz/chromium');
-      puppeteer = require('puppeteer-core');
+      const core = require('puppeteer-core');
+      try {
+        const { addExtra } = require('puppeteer-extra');
+        const Stealth = require('puppeteer-extra-plugin-stealth');
+        puppeteer = addExtra(core); puppeteer.use(Stealth());
+        await this._reportRepair('stealth-enabled');
+      } catch (e) { puppeteer = core; await this._reportRepair('stealth-missing (plain):' + (e.message || '').slice(0, 40)); }
       try { chromium.setGraphicsMode = false; } catch (_) {}
-    } catch (e) { await this._reportRepair('deps-missing:' + e.message); return false; }
+    } catch (e) { await this._reportRepair('deps-missing:' + (e.message || '').slice(0, 60)); return false; }
     try {
       await this._reportRepair('launching-chromium');
       const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
@@ -909,16 +919,19 @@ class PoWsClient {
         executablePath: execPath || undefined,
         args: [...(chromium.args || []), '--no-sandbox', '--disable-setuid-sandbox',
                '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions',
-               '--disable-background-networking', '--mute-audio'],
-        defaultViewport: { width: 800, height: 600 },
+               '--disable-background-networking', '--mute-audio',
+               '--single-process', '--no-zygote'],   // ← minimise RAM on 512 MB
+        defaultViewport: { width: 1280, height: 800 },
       });
       const page = (await browser.pages())[0] || await browser.newPage();
+      try { await page.setUserAgent(this._ua().replace(/Headless/gi, '')); } catch (_) {}
+      // Block only the heaviest resources — KEEP scripts + css so PO's JS and the
+      // (invisible) reCAPTCHA actually run.
       try {
         await page.setRequestInterception(true);
         page.on('request', r => {
           const t = r.resourceType();
-          if (t === 'image' || t === 'media' || t === 'font' || t === 'stylesheet') r.abort();
-          else r.continue();
+          if (t === 'image' || t === 'media' || t === 'font') r.abort(); else r.continue();
         });
       } catch (_) {}
       const cdp = await page.target().createCDPSession();
@@ -927,42 +940,67 @@ class PoWsClient {
       const urlById = {};
       const isApi = u => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
       cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
-        urlById[requestId] = url;
-        if (isApi(url) && !wsUrl) wsUrl = url;
+        urlById[requestId] = url; if (isApi(url) && !wsUrl) wsUrl = url;
       });
       cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
         const d = (response && response.payloadData) || '';
         const u = urlById[requestId] || '';
-        // Grab the PRICE-server auth (has "session"), NOT the chat "sessionToken".
         if (/"auth"/.test(d) && /"session"/.test(d) && isApi(u)) { authFrame = d; wsUrl = u; }
       });
+      const grabCi = async () => {
+        try { const cks = await page.cookies('https://pocketoption.com'); const c = cks.find(c => c.name === 'ci_session'); return c ? c.value : ''; }
+        catch (_) { return ''; }
+      };
 
       await this._reportRepair('browser-launched');
       await page.goto(PO_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3500));
       await this._reportRepair('login-page-loaded');
-      await page.type('input[type="email"], input[name="email"], #email', PO_EMAIL, { delay: 25 }).catch(() => {});
-      await page.type('input[type="password"], input[name="password"], #password', PO_PASSWORD, { delay: 25 }).catch(() => {});
+      await page.type('input[type="email"], input[name="email"], #email', PO_EMAIL, { delay: 30 }).catch(() => {});
+      await page.type('input[type="password"], input[name="password"], #password', PO_PASSWORD, { delay: 30 }).catch(() => {});
       await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button'); if (b) b.click(); }).catch(() => {});
       await this._reportRepair('login-submitted');
 
-      const start = Date.now();
-      while (Date.now() - start < 45_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+      // Success = we leave the /login/ page. Then read the server-IP ci_session.
+      await page.waitForFunction(() => !/\/(login|sign-in)\/?($|[?#])/i.test(location.href), { timeout: 45_000 }).catch(() => {});
+      const url2 = (await page.url().catch(() => '')) || '';
+      await this._reportRepair('post-login url=' + url2.replace(/^https?:\/\/[^/]+/, '').slice(0, 40));
+      let ci = await grabCi();
+
+      // If we don't have the WS auth yet, open the chart so the price WS connects.
+      if (!authFrame) {
+        const chartUrl = process.env.PO_CHART_URL || 'https://pocketoption.com/en/cabinet/quick-high-low/';
+        await page.goto(chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+        const t0 = Date.now();
+        while (Date.now() - t0 < 30_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+        if (!ci) ci = await grabCi();
+      }
 
       try { await browser.close(); } catch (_) {} browser = null;
 
       if (authFrame) {
-        activeAuth = authFrame.replace(/^4\d+(-)?/, '');   // store ["auth",{...}]
+        activeAuth = authFrame.replace(/^4\d+(-)?/, '');
         if (wsUrl) activeWsUrl = wsUrl;
         await saveToken(activeAuth, activeWsUrl);
-        await this._reportRepair('auth-captured-ok');
-        log('recaptured a fresh token ✅');
+        await this._reportRepair('auth-captured-ok (ws frame) ✅');
+        log('recaptured a fresh token ✅ (ws frame)');
         return true;
       }
-      await this._reportRepair('no-auth-after-45s (login failed / captcha?)');
+      if (ci && ci.length > 40) {
+        const uid = ((/"uid":"?(\d+)/.exec(activeAuth) || /"uid":"?(\d+)/.exec(PO_AUTH) || [])[1]) || '';
+        activeAuth = JSON.stringify(['auth', {
+          session: decodeURIComponent(ci), isDemo: 0, uid: Number(uid) || 0,
+          platform: 2, isFastHistory: true, isOptimized: true,
+        }]);
+        await saveToken(activeAuth, activeWsUrl);
+        await this._reportRepair('auth-from-ci_session ✅ (len=' + ci.length + ')');
+        log('recaptured a fresh token ✅ (ci_session)');
+        return true;
+      }
+      await this._reportRepair('no-auth-after-login (login blocked / captcha challenge?)');
       return false;
     } catch (e) {
-      await this._reportRepair('error:' + (e.message || '').slice(0, 80));
+      await this._reportRepair('browser-error:' + (e.message || '').slice(0, 80));
       warn('recapture error:', e.message);
       return false;
     } finally {

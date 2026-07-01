@@ -11,6 +11,8 @@
     "ws": "^8.18.0",
     "@supabase/supabase-js": "^2.49.0",
     "puppeteer-core": "^23.11.1",
-    "@sparticuz/chromium": "^131.0.1"
+    "@sparticuz/chromium": "^131.0.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
