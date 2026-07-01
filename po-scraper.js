@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'browser-2';
+const BUILD = 'browser-3';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -970,6 +970,48 @@ class PoWsClient {
         return { e: !!e, p: !!p };
       }, PO_EMAIL, PO_PASSWORD).catch(() => ({ e: false, p: false }));
       await this._reportRepair('creds-filled email=' + (filled.e ? 'Y' : 'N') + ' pass=' + (filled.p ? 'Y' : 'N'));
+
+      // Inspect the rendered reCAPTCHA so we KNOW the type/sitekey from the live DOM.
+      const rc = await page.evaluate(() => {
+        const api = document.querySelector('script[src*="recaptcha"]');
+        const dsk = document.querySelector('[data-sitekey]');
+        const grt = document.querySelector('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
+        return {
+          api: api ? api.src : '',
+          sitekey: (dsk && dsk.getAttribute('data-sitekey')) || '',
+          hasGrt: !!grt,
+        };
+      }).catch(() => ({}));
+      await this._reportRepair('browser:rc sitekey=' + ((rc.sitekey || '').slice(0, 10) || '-') + ' api=' + ((rc.api || '').replace(/^https?:\/\//, '').slice(0, 34) || '-'));
+
+      // Solve reCAPTCHA v2 via 2captcha and inject it (+ fire the client callback),
+      // so PO accepts the login even though the headless browser gets challenged.
+      const sitekey = rc.sitekey || (/recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]{20,})/i.exec(await page.content().catch(() => '')) || [])[1] || '6LeJDkwpAAAAAP-Xj4E2vY0K8f8n8m1l3xL5c9dQ';
+      if (CAPTCHA_API_KEY && sitekey) {
+        try {
+          await this._reportRepair('browser:solving-v2 key=' + sitekey.slice(0, 10));
+          const tok = await solveRecaptcha({ sitekey, pageurl: PO_LOGIN_URL, version: 'v2' });
+          await page.evaluate((token) => {
+            document.querySelectorAll('textarea[name="g-recaptcha-response"], #g-recaptcha-response')
+              .forEach(t => { t.value = token; t.innerHTML = token; });
+            const tk = document.querySelector('input[name="token"], #token'); if (tk) tk.value = token;
+            // Invoke the site's reCAPTCHA callback (traverse grecaptcha client cfg).
+            try {
+              const cfg = window.___grecaptcha_cfg;
+              if (cfg && cfg.clients) {
+                Object.values(cfg.clients).forEach(client => {
+                  Object.values(client).forEach(top => {
+                    if (top && typeof top === 'object') Object.values(top).forEach(sub => {
+                      if (sub && typeof sub === 'object' && typeof sub.callback === 'function') { try { sub.callback(token); } catch (e) {} }
+                    });
+                  });
+                });
+              }
+            } catch (e) {}
+          }, tok).catch(() => {});
+          await this._reportRepair('browser:v2-injected');
+        } catch (e) { await this._reportRepair('browser:v2-fail:' + (e.message || '').slice(0, 40)); }
+      }
 
       // Submit: click the submit button, and press Enter as a fallback.
       await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button, button.btn'); if (b) b.click(); }).catch(() => {});
