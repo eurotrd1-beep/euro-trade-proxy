@@ -487,18 +487,10 @@ class PoWsClient {
     warn(`ws closed (${diag})`);
     this._reportStatus({ connected: false, loggedIn: false, phase, diag });
 
-    // Persistent flapping with a token that AUTHS but won't hold ⇒ the captured
-    // token is bound to the capture IP / shared with the browser. The real fix is
-    // a token captured FROM THE SERVER'S OWN IP — do it once automatically.
-    if (this._flaps === 4 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
-      this._triedRecapture = true;
-      err('🟧 OTC: token auths but keeps dropping (IP-bound/shared). Auto-capturing a SERVER-IP token…');
-      this._repair();                 // browser strike on Render → server-IP token → _connect
-      return;                         // don't also schedule a plain reconnect
-    }
-    if (this._flaps === 6 && !PO_EMAIL) {
-      err('🟧🟧 OTC: persistent flapping. Set PO_EMAIL/PO_PASSWORD so the server can capture its own token, or the session is IP-locked. 🟧🟧');
-    }
+    // NOTE: the browser-based auto-recapture is intentionally NOT triggered here.
+    // On 512 MB it OOMs, and its fresh login creates a same-account session
+    // conflict that kicks THIS socket (1s closes). We rely on the local token +
+    // keep-alive instead. (recaptureToken remains available for manual/high-RAM use.)
     this._scheduleReconnect(delay);
   }
 
