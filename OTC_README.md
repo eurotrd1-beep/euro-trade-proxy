@@ -18,7 +18,36 @@ Pocket Option WS ──auth(token)──► po-scraper.js ──► Supabase
    • otc_pairs    table    discovered library (admin enables per pair)
 ```
 
-## One-time setup
+## Running 24/7 on Render (no PC) — via 2captcha
+
+PO binds each session token to the IP that created it, and its login is
+reCAPTCHA-gated. So for the **server** to stream, the server must log in *itself*
+(→ server-IP token) and get past the captcha. That's what `CAPTCHA_API_KEY`
+enables: on startup Render's token auths but streams nothing (it was minted on
+another IP) → the scraper auto-runs `httpLogin()` → GET login page → extract
+reCAPTCHA sitekey → **2captcha** solves it (10-30 s) → POST login → capture
+`ci_session` bound to **Render's IP** → reconnect → prices stream 24/7.
+
+**Setup:**
+1. Create a [2captcha](https://2captcha.com) account, add a little balance
+   (~$3 solves ~1000 logins; we log in rarely), copy the API key.
+2. On Render (`euro-trade-proxy-1` → Environment) set:
+   - `CAPTCHA_API_KEY` = your 2captcha key
+   - `PO_EMAIL` / `PO_PASSWORD` = your Pocket Option login
+   - `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` (shared)
+   - `PO_AUTH` optional (any token; it self-heals to a server-IP one anyway)
+   - make sure `OTC_AUTOSTART` is **not** `0`
+3. Deploy. Confirm from Supabase `configs/otc_status.cfg` →
+   `build=2captcha-1 … captcha=true`, then watch `repairDiag` walk through
+   `http:solving-recaptcha → http:captcha-solved ✅ → http:LOGIN-OK ✅`.
+
+## Alternative: run on your PC (free, no captcha)
+
+The captured home token works on the home IP with no fresh login. Run
+`node run-otc.js` (after `node get-po-ssid.js`) and leave it open. Good as a
+free fallback; needs the PC on.
+
+## One-time setup (manual token, optional)
 
 1. **Capture the token (local PC):**
    ```
@@ -37,12 +66,14 @@ Pocket Option WS ──auth(token)──► po-scraper.js ──► Supabase
   `PO_HEARTBEAT` frames + re-subscribe to every enabled symbol + periodic re-auth.
   Optional 2nd HTTP channel (`PO_KEEPALIVE_URL` + `PO_COOKIE`).
 - **Watchdog:** no fresh data 30 s → fast retries; 3 in a row ⇒ token declared dead.
-- **Self-repair:** auto re-captures the token with a brief, resource-blocked,
-  login-only browser "strike" (needs `PO_EMAIL`/`PO_PASSWORD`), saves it to
-  `configs/otc_token`, reconnects. Circuit-breaker: 3 fails → pause 5 min.
+- **Self-repair:** auto-mints a fresh **server-IP** token via `httpLogin()`
+  (raw HTTP + 2captcha, no browser — needs `PO_EMAIL`/`PO_PASSWORD` +
+  `CAPTCHA_API_KEY`), saves it to `configs/otc_token`, reconnects. Captcha gets
+  3 tries; if all fail → pause 5 min and retry (circuit-breaker).
 - **Last resort:** only if auto-repair keeps failing → loud log alert
-  `🟥 LAST RESORT — AUTO-REPAIR FAILED` → run `get-po-ssid.js` once and update
-  `PO_AUTH`. TradingView is never affected.
+  `🟥 LAST RESORT — AUTO-REPAIR FAILED` → check `CAPTCHA_API_KEY` / 2captcha
+  balance / credentials, or run `get-po-ssid.js` once and update `PO_AUTH`.
+  TradingView is never affected.
 - **Token persistence:** the freshest token is reused across restarts.
 
 ## User-facing chart during a repair

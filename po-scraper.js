@@ -43,6 +43,9 @@ const PO_IS_DEMO   = (process.env.PO_IS_DEMO || '1') === '1';
 const PO_EMAIL     = process.env.PO_EMAIL || '';
 const PO_PASSWORD  = process.env.PO_PASSWORD || '';
 const PO_LOGIN_URL = process.env.PO_LOGIN_URL || 'https://pocketoption.com/en/login/';
+// 2captcha API key — enables solving PO's login reCAPTCHA so the SERVER can log
+// in and mint a server-IP token (24/7 on Render, no PC needed). Optional.
+const CAPTCHA_API_KEY = process.env.CAPTCHA_API_KEY || process.env.TWOCAPTCHA_API_KEY || '';
 
 // Active session token + ws url (start from env; replaced by auto-recapture and
 // persisted to Supabase so a restart reuses the freshest token).
@@ -71,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'httplogin-2';
+const BUILD = '2captcha-1';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -106,6 +109,36 @@ function multipartBody(boundary, fields) {
     s += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v == null ? '' : v}\r\n`;
   }
   return s + `--${boundary}--\r\n`;
+}
+
+// ── 2captcha reCAPTCHA solver ────────────────────────────────────────────────
+// Solves PO's login reCAPTCHA so the SERVER can log in and mint a server-IP
+// token (24/7 on Render, no PC needed). Supports v3 (score-based, needs an
+// action) and v2. Submit → poll res.php every 5s → return the solved token.
+// Throws on any failure so the caller can retry / back off.
+async function solveRecaptcha({ sitekey, pageurl, action, version }) {
+  if (!CAPTCHA_API_KEY) throw new Error('no CAPTCHA_API_KEY');
+  const q = new URLSearchParams({
+    key: CAPTCHA_API_KEY, method: 'userrecaptcha',
+    googlekey: sitekey, pageurl, json: '1',
+  });
+  if (version === 'v3') { q.set('version', 'v3'); q.set('action', action || 'login'); q.set('min_score', '0.3'); }
+  const sub = await httpReq('GET', 'https://2captcha.com/in.php?' + q.toString());
+  if (sub.error) throw new Error('in.php ' + sub.error);
+  let id;
+  try { const j = JSON.parse(sub.body); if (Number(j.status) !== 1) throw new Error('in.php ' + j.request); id = j.request; }
+  catch (e) { throw new Error('in.php ' + (e.message || (sub.body || '').slice(0, 80))); }
+  // Poll up to ~150s (v3 typically 10-30s; v2 can be longer).
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const res = await httpReq('GET',
+      `https://2captcha.com/res.php?key=${CAPTCHA_API_KEY}&action=get&id=${id}&json=1`);
+    if (res.error) continue;
+    let j; try { j = JSON.parse(res.body); } catch (_) { continue; }
+    if (Number(j.status) === 1) return j.request;                         // solved token
+    if (j.request && j.request !== 'CAPCHA_NOT_READY') throw new Error('res.php ' + j.request);
+  }
+  throw new Error('res.php timeout (>150s)');
 }
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
@@ -618,17 +651,20 @@ class PoWsClient {
       this._repairing = false;
       this._connect();
     } catch (e) {
-      this._repairFails++;
       this._repairing = false;
-      err(`self-repair failed (${this._repairFails}): ${e.message}`);
-      if (this._repairFails >= 3) {
+      // Captcha exhausted (3 tries) → skip the quick-retry window, back off 5 min now.
+      const hardBackoff = this._captchaExhausted; this._captchaExhausted = false;
+      this._repairFails++;
+      err(`self-repair failed (${this._repairFails}${hardBackoff ? ', captcha-exhausted' : ''}): ${e.message}`);
+      if (hardBackoff || this._repairFails >= 3) {
         // Circuit-breaker: stop hammering for 5 min, and raise the last-resort alert.
         this._repairOpenUntil = Date.now() + 5 * 60 * 1000;
         this._repairFails = 0;
-        this._reportStatus({ connected: false, loggedIn: false, phase: 'login_failed', lastError: 'auto-repair failed; manual token needed' });
+        this._reportStatus({ connected: false, loggedIn: false, phase: 'login_failed', lastError: 'auto-repair failed; check CAPTCHA_API_KEY / 2captcha balance' });
         err('🟥🟥🟥 LAST RESORT — AUTO-REPAIR FAILED 🟥🟥🟥');
-        err('Could not auto-recapture the token after 3 tries (paused 5 min).');
-        err('Run get-po-ssid.js locally ONCE and update PO_AUTH on Render. (TradingView unaffected.)');
+        err('Could not mint a server-IP token after 3 tries (paused 5 min).');
+        err('Check: CAPTCHA_API_KEY is set + 2captcha has balance + PO_EMAIL/PO_PASSWORD correct.');
+        err('Fallback: run get-po-ssid.js locally ONCE and update PO_AUTH on Render. (TradingView unaffected.)');
         err('🟥🟥🟥────────────────────────────────────────────🟥🟥🟥');
         setTimeout(() => this._repair(), 5 * 60 * 1000 + 1000);
       } else {
@@ -638,9 +674,10 @@ class PoWsClient {
   }
 
   // ── Raw HTTP login from the SERVER (no browser) → server-IP ci_session token ──
-  // Replicates the browser's login POST. If PO's anti-bot `token` is a page nonce
-  // (not a live reCAPTCHA), this works free; if it needs a live captcha token,
-  // repairDiag will show 'no-ci_session' and we'll know.
+  // Replicates the browser's login POST. PO's login is reCAPTCHA-gated, so this
+  // needs CAPTCHA_API_KEY (2captcha): GET login page → extract sitekey → solve
+  // captcha → POST with the solved token → capture ci_session (bound to the
+  // SERVER's IP → streams 24/7 on Render, no PC needed). Every step → repairDiag.
   async httpLogin() {
     if (!PO_EMAIL || !PO_PASSWORD) { await this._reportRepair('http:no-credentials'); return false; }
     const ua = this._ua();
@@ -670,10 +707,46 @@ class PoWsClient {
                        /register_page["']?\s*[:=]\s*["']?([0-9]+)/i.exec(html) || [])[1] || '';
       await this._reportRepair(`http:got-page status=${g.status} token=${token ? 'Y' : 'N'} reg=${regPage ? 'Y' : 'N'} cookies=${Object.keys(jar).length}`);
 
+      // ── Solve reCAPTCHA via 2captcha so PO accepts a server-side login. ──
+      // v3 sitekey lives in  recaptcha/api.js?render=SITEKEY  (invisible, score-based);
+      // v2 sitekey in  data-sitekey / grecaptcha.render|execute('SITEKEY').
+      let captcha = '';
+      if (CAPTCHA_API_KEY) {
+        const v3key = (/recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]+)/i.exec(html) || [])[1];
+        const v2key = (/data-sitekey=["']([\w-]+)/i.exec(html) ||
+                       /grecaptcha\.(?:execute|render)\(\s*["']([\w-]+)["']/i.exec(html) || [])[1];
+        const sitekey = v3key || v2key;
+        const version = v3key ? 'v3' : 'v2';
+        const action  = (/grecaptcha\.execute\(\s*["'][\w-]+["']\s*,\s*\{[^}]*\baction\s*:\s*["']([^"']+)/i.exec(html) || [])[1] || 'login';
+        if (!sitekey) {
+          await this._reportRepair('http:no-sitekey-on-page (login will likely be rejected)');
+        } else {
+          await this._reportRepair(`http:solving-recaptcha ${version} key=${sitekey.slice(0, 12)}… act=${action}`);
+          for (let attempt = 1; attempt <= 3 && !captcha; attempt++) {
+            try {
+              captcha = await solveRecaptcha({ sitekey, pageurl: PO_LOGIN_URL, action, version });
+            } catch (e) {
+              await this._reportRepair(`http:captcha-try${attempt}/3-fail:${(e.message || '').slice(0, 50)}`);
+            }
+          }
+          if (!captcha) {
+            // Captcha unsolvable after 3 tries → tell _repair to back off 5 min.
+            this._captchaExhausted = true;
+            await this._reportRepair('http:captcha-failed-3x → backing off 5 min');
+            return false;
+          }
+          await this._reportRepair('http:captcha-solved ✅');
+        }
+      } else {
+        await this._reportRepair('http:no-CAPTCHA_API_KEY set (raw login — likely rejected)');
+      }
+
       const boundary = '----poB' + Math.random().toString(36).slice(2);
       const body = multipartBody(boundary, {
         submitLogin: '1', email: PO_EMAIL, password: PO_PASSWORD,
-        'g-recaptcha-response': '', register_page: regPage, token,
+        // PO reads the reCAPTCHA token from the `token` field (empty g-recaptcha-response
+        // in the real browser POST); send the solution in both to be safe.
+        'g-recaptcha-response': captcha, register_page: regPage, token: captcha || token,
       });
       const p = await httpReq('POST', PO_LOGIN_URL, {
         headers: {
@@ -1020,7 +1093,7 @@ async function start() {
       const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
       const cur = (data && data.data) || {};
       await db.from('configs').update({ data: { ...cur,
-        cfg: `build=${BUILD} email=${!!PO_EMAIL} pass=${!!PO_PASSWORD} authLen=${(activeAuth || '').length} ws=${(activeWsUrl || '').replace(/\?.*/, '')}`,
+        cfg: `build=${BUILD} email=${!!PO_EMAIL} pass=${!!PO_PASSWORD} captcha=${!!CAPTCHA_API_KEY} authLen=${(activeAuth || '').length} ws=${(activeWsUrl || '').replace(/\?.*/, '')}`,
       } }).eq('id', 'otc_status');
     } catch (_) {}
   }
