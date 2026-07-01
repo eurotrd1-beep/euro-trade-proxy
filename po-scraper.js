@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-4';
+const BUILD = '2captcha-5';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -741,13 +741,27 @@ class PoWsClient {
         await this._reportRepair('http:no-CAPTCHA_API_KEY set (raw login — likely rejected)');
       }
 
+      // Collect EVERY input from the login form (so we never drop a hidden field
+      // like a CSRF token), then override with our creds + captcha — matching the
+      // real browser POST EXACTLY: the v3 solution goes in `token`, and
+      // `g-recaptcha-response` is left EMPTY (filling it can trip a v2 check).
+      const fields = {};
+      const forms = html.match(/<form[\s\S]*?<\/form>/gi) || [];
+      const scope = forms.find(f => /type=["']password["']/i.test(f)) || forms[0] || html;
+      let im; const inputRe = /<input\b[^>]*>/gi;
+      while ((im = inputRe.exec(scope))) {
+        const n = (/name=["']([^"']+)/i.exec(im[0]) || [])[1];
+        if (n) fields[n] = (/value=["']([^"']*)/i.exec(im[0]) || [])[1] || '';
+      }
+      fields.email = PO_EMAIL;
+      fields.password = PO_PASSWORD;
+      fields.submitLogin = '1';
+      fields['g-recaptcha-response'] = '';
+      fields.token = captcha;
+      if (regPage && !fields.register_page) fields.register_page = regPage;
+      await this._reportRepair('http:form-fields [' + Object.keys(fields).join(',') + ']');
       const boundary = '----poB' + Math.random().toString(36).slice(2);
-      const body = multipartBody(boundary, {
-        submitLogin: '1', email: PO_EMAIL, password: PO_PASSWORD,
-        // PO reads the reCAPTCHA token from the `token` field (empty g-recaptcha-response
-        // in the real browser POST); send the solution in both to be safe.
-        'g-recaptcha-response': captcha, register_page: regPage, token: captcha || token,
-      });
+      const body = multipartBody(boundary, fields);
       const p = await httpReq('POST', PO_LOGIN_URL, {
         headers: {
           ...baseHeaders,
