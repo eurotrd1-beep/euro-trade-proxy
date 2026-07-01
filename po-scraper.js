@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'browser-3';
+const BUILD = 'browser-4';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -971,22 +971,23 @@ class PoWsClient {
       }, PO_EMAIL, PO_PASSWORD).catch(() => ({ e: false, p: false }));
       await this._reportRepair('creds-filled email=' + (filled.e ? 'Y' : 'N') + ' pass=' + (filled.p ? 'Y' : 'N'));
 
-      // Inspect the rendered reCAPTCHA so we KNOW the type/sitekey from the live DOM.
+      // Read the REAL sitekey from the live DOM — most reliably from the reCAPTCHA
+      // iframe's ?k=… param (always the true sitekey). No fabricated fallback.
+      await page.waitForSelector('iframe[src*="recaptcha"], [data-sitekey]', { timeout: 8000 }).catch(() => {});
       const rc = await page.evaluate(() => {
-        const api = document.querySelector('script[src*="recaptcha"]');
         const dsk = document.querySelector('[data-sitekey]');
-        const grt = document.querySelector('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
-        return {
-          api: api ? api.src : '',
-          sitekey: (dsk && dsk.getAttribute('data-sitekey')) || '',
-          hasGrt: !!grt,
-        };
-      }).catch(() => ({}));
-      await this._reportRepair('browser:rc sitekey=' + ((rc.sitekey || '').slice(0, 10) || '-') + ' api=' + ((rc.api || '').replace(/^https?:\/\//, '').slice(0, 34) || '-'));
+        if (dsk && dsk.getAttribute('data-sitekey')) return { sitekey: dsk.getAttribute('data-sitekey'), src: 'data' };
+        const ifr = document.querySelector('iframe[src*="recaptcha"]');
+        if (ifr) { const m = /[?&]k=([\w-]+)/.exec(ifr.src); if (m) return { sitekey: m[1], src: 'iframe' }; }
+        const m2 = /recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]{20,})/.exec(document.documentElement.innerHTML);
+        if (m2) return { sitekey: m2[1], src: 'render' };
+        return { sitekey: '', src: 'none' };
+      }).catch(() => ({ sitekey: '', src: 'err' }));
+      const sitekey = rc.sitekey || '';
+      await this._reportRepair('browser:sitekey=' + (sitekey ? sitekey.slice(0, 22) : '-') + ' via=' + rc.src);
 
       // Solve reCAPTCHA v2 via 2captcha and inject it (+ fire the client callback),
       // so PO accepts the login even though the headless browser gets challenged.
-      const sitekey = rc.sitekey || (/recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]{20,})/i.exec(await page.content().catch(() => '')) || [])[1] || '6LeJDkwpAAAAAP-Xj4E2vY0K8f8n8m1l3xL5c9dQ';
       if (CAPTCHA_API_KEY && sitekey) {
         try {
           await this._reportRepair('browser:solving-v2 key=' + sitekey.slice(0, 10));
@@ -1029,7 +1030,19 @@ class PoWsClient {
         if (ci && ci.length > 40) break;
       }
       if (!ci) ci = await grabCi();
-      await this._reportRepair('post-login url=' + pageUrl().replace(/^https?:\/\/[^/]+/, '').slice(0, 30) + ' ci=' + (ci ? ci.length : 0));
+      // If still stuck, capture any visible error PO shows so we know the reason.
+      let errMsg = '';
+      if (!ci) {
+        errMsg = await page.evaluate(() => {
+          const sel = '.error, .alert, .invalid-feedback, .help-block, [class*="error"], [class*="danger"], [class*="invalid"]';
+          for (const el of document.querySelectorAll(sel)) {
+            const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (t && t.length > 2 && el.offsetParent !== null) return t;
+          }
+          return '';
+        }).catch(() => '');
+      }
+      await this._reportRepair('post-login url=' + pageUrl().replace(/^https?:\/\/[^/]+/, '').slice(0, 24) + ' ci=' + (ci ? ci.length : 0) + (errMsg ? ' err="' + errMsg.slice(0, 90) + '"' : ''));
 
       // If we still have no server-IP session, open the chart to trigger the price WS.
       if (!authFrame && !(ci && ci.length > 40)) {
