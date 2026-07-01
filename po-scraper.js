@@ -285,7 +285,8 @@ class PoWsClient {
     this._connectedAt = 0;    // when the socket opened (for session-length check)
     this._flaps = 0;          // consecutive short-lived sessions (flapping)
     this._triedRecapture = false;  // already tried a server-IP recapture this run?
-    this._framesRecv = 0;     // data frames received in the current session (diag)
+    this._framesRecv = 0;
+    this._priceFrames = 0;    // price ticks (updateStream/history), not the catalogue
     this._scanning = false;
     this._scanAssets = [];
     this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
@@ -370,6 +371,7 @@ class PoWsClient {
       this.connected = true;
       this._connectedAt = Date.now();
       this._framesRecv = 0;
+      this._priceFrames = 0;
       log('ws open — handshaking');
       this._reportStatus({ connected: true, loggedIn: false, phase: 'relogin' });
     });
@@ -409,10 +411,9 @@ class PoWsClient {
       this._send('42["indicator/load"]');
       this._send('42["favorite/load"]');
       this._send('42["price-alert/load"]');
-      this._subscribeAll();                 // changeSymbol + subfor per enabled symbol
       this._send('42["ps"]');
-      log('auth + init sequence + subscribe sent');
-      return;
+      log('auth + init sequence sent (subscribe follows the catalogue)');
+      return;   // subscribe AFTER the catalogue arrives (proof PO is ready) — see _ingest
     }
 
     // Socket.IO event / ack ("42[...]", "451-[...]", "43[...]" …).
@@ -439,11 +440,13 @@ class PoWsClient {
       this._health.lastHeartbeatOk = new Date().toISOString();
       this._staleChecks = 0;
       this._framesRecv++;
+      if (gotPrices) this._priceFrames++;      // PRICE ticks specifically (not catalogue)
       if (!this.authed) {
         this.authed = true; this.loginFails = 0; this._repairFails = 0;
         this._authedAt = Date.now();
         this._reportStatus({ connected: true, loggedIn: true, phase: 'live' });
-        log('authenticated — receiving live data ✅');
+        log('first data received (catalogue) — subscribing…');
+        setTimeout(() => this._subscribeAll(), 800);  // PO is ready now → subscribe
         this._startHeartbeat();       // keep the session "active"
         this._startWatchdog();        // detect a silent death even while "connected"
       }
@@ -483,7 +486,7 @@ class PoWsClient {
       phase = (this._flaps >= 4 || this.loginFails >= MAX_LOGIN_FAILS) ? 'login_failed' : 'reconnecting';
     }
 
-    const diag = `close=${code} alive=${Math.round(aliveMs / 1000)}s frames=${this._framesRecv} flaps=${this._flaps} authed=${wasAuthed}`;
+    const diag = `close=${code} alive=${Math.round(aliveMs / 1000)}s frames=${this._framesRecv} priceFrames=${this._priceFrames} flaps=${this._flaps} authed=${wasAuthed}`;
     warn(`ws closed (${diag})`);
     this._reportStatus({ connected: false, loggedIn: false, phase, diag });
 
