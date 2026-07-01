@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'browser-4';
+const BUILD = 'allassets-1';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -196,6 +196,26 @@ const PoProtocol = {
 
   expectedDecimals(symbol) { return /JPY/i.test(symbol) ? 3 : 5; },
 
+  // Map a PO asset (its raw catalogue "type" + symbol) to one of the 5 categories
+  // the app groups by. Best-effort: prefer PO's type, fall back to symbol shape.
+  classify(rawType, symRaw) {
+    const t = String(rawType || '').toLowerCase();
+    const s = String(symRaw || '').toLowerCase();
+    if (/curren|forex|\bfx\b/.test(t)) return 'currencies';
+    if (/commod/.test(t))              return 'commodities';
+    if (/stock|equit|share/.test(t))   return 'stocks';
+    if (/index|indic/.test(t))         return 'indices';
+    if (/crypto|coin/.test(t))         return 'crypto';
+    // Fallbacks by symbol when the type is missing/unknown.
+    if (s.startsWith('#'))                                         return 'stocks';
+    if (/btc|eth|ltc|xrp|doge|sol|ada|bnb|dot|link|ton|trx/.test(s)) return 'crypto';
+    if (/xau|xag|xpt|xpd|gold|silver|oil|brent|wti|ngas|gas/.test(s)) return 'commodities';
+    if (/spx|ndx|dax|ftse|nikkei|dow|us30|us100|us500|jp225|hk50|aus200|stoxx/.test(s)) return 'indices';
+    // Two 3-letter legs (optionally _otc) → currency pair.
+    if (/^[a-z]{6}(_otc)?$/.test(s.replace(/[^a-z_]/g, ''))) return 'currencies';
+    return 'currencies';
+  },
+
   // Parse one decoded payload (from a text "42[...]" event OR a binary frame) →
   // { prices:{sym:price}, assets:[{symbol,name}] }.
   //  • updateAssets : [[id,"SYM","Name","type",...], …]        → asset catalogue + idMap
@@ -215,7 +235,8 @@ const PoProtocol = {
       return out;
     }
 
-    // asset catalogue: array of [id, "SYM", "Name", "type", ...]
+    // asset catalogue: array of [id, "SYM", "Name", "type", ...]. Capture EVERY
+    // asset (OTC + real, all classes) — not just OTC — with its type/category.
     if (this._looksLikeAssetList(body)) {
       for (const a of body) {
         if (!Array.isArray(a) || a.length < 3) continue;
@@ -223,10 +244,14 @@ const PoProtocol = {
         const symRaw = typeof a[1] === 'string' ? a[1] : null;
         if (!symRaw) continue;
         const symbol = this.normalize(symRaw);
-        if (typeof id === 'number' && symbol) this.idMap[id] = symbol;
-        if (/otc/i.test(symRaw)) {
-          const name = (typeof a[2] === 'string' && a[2]) ? a[2] : this.displayName(symbol);
-          if (!out.assets.some(x => x.symbol === symbol)) out.assets.push({ symbol, name });
+        if (!symbol) continue;
+        if (typeof id === 'number') this.idMap[id] = symbol;
+        const name = (typeof a[2] === 'string' && a[2]) ? a[2] : this.displayName(symbol);
+        const rawType = typeof a[3] === 'string' ? a[3] : '';
+        const isOtc = /otc/i.test(symRaw);
+        const category = this.classify(rawType, symRaw);
+        if (!out.assets.some(x => x.symbol === symbol)) {
+          out.assets.push({ symbol, name, type: rawType, isOtc, category });
         }
       }
       return out;
@@ -1231,13 +1256,16 @@ class PoWsClient {
         await new Promise(r => setTimeout(r, 500));
       }
       const found = [...this._assetMap.values()];
-      // Also include any OTC symbols we've already seen live prices for.
+      // Also include any symbols we've already seen live prices for (any class).
       for (const sym of Object.keys(this.prices)) {
-        if (/otc/i.test(sym) && !found.some(x => x.symbol === sym)) {
-          found.push({ symbol: sym, name: this.proto.displayName(sym) });
+        if (!found.some(x => x.symbol === sym)) {
+          found.push({
+            symbol: sym, name: this.proto.displayName(sym),
+            type: '', isOtc: /otc/i.test(sym), category: this.proto.classify('', sym),
+          });
         }
       }
-      log(`scan: found ${found.length} OTC pair(s)`);
+      log(`scan: found ${found.length} pair(s) (all classes)`);
       await this._upsertLibrary(found);
       await this._reportScan({ status: 'done', count: found.length, message: `تم العثور على ${found.length} زوج` });
     } catch (e) {
@@ -1250,11 +1278,23 @@ class PoWsClient {
     if (!db || !assets.length) return;
     const rows = assets.map(a => ({
       platform: this.proto.id, symbol: a.symbol,
-      name: a.name || this.proto.displayName(a.symbol), updated_at: new Date().toISOString(),
+      name: a.name || this.proto.displayName(a.symbol),
+      asset_type: a.type || null,
+      is_otc: a.isOtc != null ? !!a.isOtc : /otc/i.test(a.symbol),
+      subcategory: a.category || this.proto.classify(a.type, a.symbol),
+      updated_at: new Date().toISOString(),
     }));
-    const { error } = await db.from('otc_pairs').upsert(rows, { onConflict: 'platform,symbol', ignoreDuplicates: false });
-    if (error) err('library upsert:', error.message);
-    else log(`library: upserted ${rows.length} pair(s)`);
+    // Upsert name/type/otc/category on conflict but NEVER touch admin-owned
+    // columns (`enabled`, `order`) — they're not in the payload, so they persist.
+    // Chunk to stay well within request limits (PO can have many hundreds).
+    let n = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const chunk = rows.slice(i, i + 200);
+      const { error } = await db.from('otc_pairs').upsert(chunk, { onConflict: 'platform,symbol', ignoreDuplicates: false });
+      if (error) { err('library upsert:', error.message); break; }
+      n += chunk.length;
+    }
+    log(`library: upserted ${n} pair(s)`);
   }
 
   async _reportScan(patch) {
