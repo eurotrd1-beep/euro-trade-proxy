@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'poopen-2';
+const BUILD = 'captcha-stats-1';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -136,10 +136,33 @@ async function solveRecaptcha({ sitekey, pageurl, action, version, invisible }) 
       `https://2captcha.com/res.php?key=${CAPTCHA_API_KEY}&action=get&id=${id}&json=1`);
     if (res.error) continue;
     let j; try { j = JSON.parse(res.body); } catch (_) { continue; }
-    if (Number(j.status) === 1) return j.request;                         // solved token
-    if (j.request && j.request !== 'CAPCHA_NOT_READY') throw new Error('res.php ' + j.request);
+    if (Number(j.status) === 1) { logCaptchaSolve(true); return j.request; } // solved
+    if (j.request && j.request !== 'CAPCHA_NOT_READY') { logCaptchaSolve(false); throw new Error('res.php ' + j.request); }
   }
+  logCaptchaSolve(false);
   throw new Error('res.php timeout (>150s)');
+}
+
+// ── 2captcha stats/balance (for the admin panel) ─────────────────────────────
+// Log each solve (success/fail + cost) and refresh the account balance after a
+// solve. Both persisted to Supabase; the admin reads them (never sees the key).
+async function logCaptchaSolve(success) {
+  if (!db) return;
+  try { await db.from('captcha_stats').insert({ success: !!success, cost: success ? 0.001 : 0 }); } catch (_) {}
+  if (success) fetchCaptchaBalance();
+}
+async function fetchCaptchaBalance() {
+  if (!db || !CAPTCHA_API_KEY) return;
+  try {
+    const r = await httpReq('GET', `https://2captcha.com/res.php?key=${CAPTCHA_API_KEY}&action=getbalance&json=1`);
+    if (r.error || !r.body) return;
+    let bal = null;
+    try { const j = JSON.parse(r.body); if (Number(j.status) === 1) bal = parseFloat(j.request); }
+    catch (_) { const m = /-?[\d.]+/.exec(r.body); if (m) bal = parseFloat(m[0]); }
+    if (bal != null && isFinite(bal)) {
+      await db.from('configs').upsert({ id: 'captcha_balance', data: { balance: bal, at: new Date().toISOString() } });
+    }
+  } catch (_) {}
 }
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
@@ -1455,6 +1478,7 @@ async function saveToken(auth, wsUrl) {
 
 async function start() {
   await loadToken();             // prefer the freshest persisted token over env
+  fetchCaptchaBalance();         // seed the 2captcha balance for the admin panel
 
   // Report build + config to the DB so we can confirm (without Render logs) which
   // code is live and whether the credentials/token are actually set on this service.
