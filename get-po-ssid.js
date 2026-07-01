@@ -51,6 +51,18 @@ const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
     }
   });
 
+  // Capture the LOGIN POST so the server can replicate it over raw HTTP (no
+  // browser) → a session token minted from the SERVER's IP.
+  const loginPosts = [];
+  cdp.on('Network.requestWillBeSent', ({ request }) => {
+    if (!request || request.method !== 'POST') return;
+    const pd = request.postData || '';
+    if (/(login|auth|sign|session)/i.test(request.url) || /pass|email/i.test(pd)) {
+      loginPosts.push({ url: request.url, headers: request.headers || {}, postData: pd.slice(0, 800) });
+      console.log('[login POST]', request.url);
+    }
+  });
+
   cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
     const d = (response && response.payloadData) || '';
     if (/"auth"/.test(d)) {
@@ -82,6 +94,15 @@ const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
     rl.question('', () => { rl.close(); resolve(); });
   });
 
+  // Dump the session cookies (ci_session = the SSID; logging in from the server
+  // will mint the same cookie with the server's IP baked in).
+  let cookies = [];
+  try {
+    cookies = await page.cookies('https://pocketoption.com/', 'https://po.market/', page.url());
+  } catch (_) {}
+  const ci = cookies.find(c => /ci_session|session/i.test(c.name));
+  if (ci) console.log('\n[ci_session cookie]', ci.name, '=', String(ci.value).slice(0, 60) + '…\n');
+
   // Prefer the auth sent to the PRICE api server (contains "session"); fall back.
   const priceAuth = authFrames.find(a => isPriceApi(a.url) && /"session"/.test(a.frame))
                  || authFrames.find(a => isPriceApi(a.url))
@@ -99,7 +120,8 @@ const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
   console.log('════════════════════════════════════════════════════════════════\n');
 
   fs.writeFileSync('po-capture.json', JSON.stringify(
-    { capturedAt: new Date().toISOString(), wsUrl, cookie, authFrames, handshakes, recvSamples, allWsUrls: wsUrls }, null, 2));
-  console.log('📄 Saved po-capture.json — send its contents back to verify.\n');
+    { capturedAt: new Date().toISOString(), wsUrl, cookie, authFrames, handshakes,
+      loginPosts, cookies, recvSamples, allWsUrls: wsUrls }, null, 2));
+  console.log('📄 Saved po-capture.json — send its contents back (login flow + cookies) so the server can replicate the login.\n');
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });
