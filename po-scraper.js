@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-6';
+const BUILD = 'poopen-1';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -179,10 +179,6 @@ const PoProtocol = {
   // id → symbol map, learned from updateAssets (live ticks may use numeric ids).
   idMap: {},
 
-  // (diag) raw catalogue entries — one real asset + one OTC — to locate is_open.
-  _sampleReal: null,
-  _sampleOtc: null,
-
   // Internal symbol = PO's exact asset symbol with ':' stripped (NO upper-casing —
   // PO uses lowercase "_otc", e.g. "EURUSD_otc", "#AAPL_otc"). No ':' means the
   // TradingView pairs-listener always ignores it.
@@ -259,12 +255,17 @@ const PoProtocol = {
         const rawType = typeof a[3] === 'string' ? a[3] : '';
         const isOtc = /otc/i.test(symRaw);
         const category = this.classify(rawType, symRaw);
+        // PO's own tradeable status: the single boolean in the entry (index ~14)
+        // is is_open; the trailing unix ts is the next-open time (−1 = 24/7).
+        const poOpen = a.find(v => typeof v === 'boolean');
+        const lastEl = a[a.length - 1];
+        const poNextOpen = (typeof lastEl === 'number' && lastEl > 1e9) ? lastEl : 0;
         if (!out.assets.some(x => x.symbol === symbol)) {
-          out.assets.push({ symbol, name, type: rawType, isOtc, category });
+          out.assets.push({
+            symbol, name, type: rawType, isOtc, category,
+            poOpen: poOpen !== false, poNextOpen,
+          });
         }
-        // (diag) capture one real + one OTC raw entry to locate PO's is_open flag.
-        if (!isOtc && !this._sampleReal) this._sampleReal = a;
-        else if (isOtc && !this._sampleOtc) this._sampleOtc = a;
       }
       return out;
     }
@@ -425,6 +426,7 @@ class PoWsClient {
     this.prices = {};
     this._priceAt = {};
     this.store = new CandleStore();
+    this._poStatus = {};   // symbol → { open, nextOpen } from PO's catalogue
     this.enabled = new Set();
     this.connected = false;
     this.authed = false;
@@ -623,13 +625,12 @@ class PoWsClient {
       for (const [sym, price] of Object.entries(res.prices)) { this.prices[sym] = price; this._priceAt[sym] = now; }
     }
     if (gotAssets) {
-      // Cache the OTC asset catalogue (PO sends updateAssets on connect) so
-      // "جلب الأزواج" can list pairs any time, not only during a scan window.
-      for (const a of res.assets) this._assetMap.set(a.symbol, a);
-      // (diag) publish raw sample entries once so we can locate PO's is_open flag.
-      if (!this._sampleReported && (this.proto._sampleReal || this.proto._sampleOtc)) {
-        this._sampleReported = true;
-        this._reportAssetSamples();
+      // Cache the OTC asset catalogue (PO sends updateAssets on connect + on
+      // status changes) so "جلب الأزواج" can list pairs any time, and track PO's
+      // own is_open / next-open per symbol (the source of truth for "tradeable").
+      for (const a of res.assets) {
+        this._assetMap.set(a.symbol, a);
+        this._poStatus[a.symbol] = { open: a.poOpen !== false, nextOpen: a.poNextOpen || 0 };
       }
     }
     // PO chart history → seed the candle series immediately (full chart at once).
@@ -966,21 +967,6 @@ class PoWsClient {
     return '';
   }
 
-  // (diag) publish raw catalogue sample entries to configs/otc_debug.
-  async _reportAssetSamples() {
-    if (!db) return;
-    try {
-      await db.from('configs').upsert({
-        id: 'otc_debug',
-        data: {
-          real: this.proto._sampleReal,
-          otc: this.proto._sampleOtc,
-          at: new Date().toISOString(),
-        },
-      });
-    } catch (_) {}
-  }
-
   // Live recapture-stage reporter → otc_status.repairDiag (so progress/failure of
   // the browser strike is visible in the DB without needing Render logs).
   async _reportRepair(stage) {
@@ -1313,7 +1299,12 @@ class PoWsClient {
       else if (stale) st = 'resolving';
       else if (!this.store.isMarketOpen(sym)) st = 'closed';
       else st = 'live';
-      snapshot[sym] = { p, o: this.store.isMarketOpen(sym), t: Math.floor(now / 1000), st };
+      // `po` = PO's OWN tradeable flag (authoritative), `no` = next-open ts.
+      const ps = this._poStatus[sym];
+      snapshot[sym] = {
+        p, o: this.store.isMarketOpen(sym), t: Math.floor(now / 1000), st,
+        po: ps ? ps.open : true, no: ps ? ps.nextOpen : 0,
+      };
       any = true;
     }
     if (!any) return;
