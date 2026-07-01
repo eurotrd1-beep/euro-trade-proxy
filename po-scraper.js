@@ -66,7 +66,9 @@ const PO_COOKIE        = process.env.PO_COOKIE || '';
 const https = require('https');
 
 // Heartbeat cadence: RANDOM 20–40 s (not a fixed tick) to look human.
-function nextBeatMs() { return 20000 + Math.floor(Math.random() * 20000); }
+// Must stay WELL under PO's Engine.IO ping interval (~25s) or PO drops the socket
+// at ~28s. 12–18s (jittered) keeps the session alive while still looking human.
+function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
 const MAX_CANDLES = 150;
