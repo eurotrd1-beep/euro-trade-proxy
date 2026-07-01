@@ -70,6 +70,9 @@ const https = require('https');
 // at ~28s. 12–18s (jittered) keeps the session alive while still looking human.
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
+// Bump on each deploy so we can confirm from the DB which build Render is running.
+const BUILD = 'httplogin-2';
+
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
   return new Promise((resolve) => {
@@ -1001,6 +1004,19 @@ async function saveToken(auth, wsUrl) {
 
 async function start() {
   await loadToken();             // prefer the freshest persisted token over env
+
+  // Report build + config to the DB so we can confirm (without Render logs) which
+  // code is live and whether the credentials/token are actually set on this service.
+  if (db) {
+    try {
+      const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
+      const cur = (data && data.data) || {};
+      await db.from('configs').update({ data: { ...cur,
+        cfg: `build=${BUILD} email=${!!PO_EMAIL} pass=${!!PO_PASSWORD} authLen=${(activeAuth || '').length} ws=${(activeWsUrl || '').replace(/\?.*/, '')}`,
+      } }).eq('id', 'otc_status');
+    } catch (_) {}
+  }
+
   const client = new PoWsClient(PoProtocol);
 
   // Know which symbols to subscribe BEFORE connecting.
