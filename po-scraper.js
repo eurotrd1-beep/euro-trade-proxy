@@ -70,6 +70,41 @@ const https = require('https');
 // at ~28s. 12–18s (jittered) keeps the session alive while still looking human.
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
+// ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
+function httpReq(method, url, { headers = {}, body = null } = {}) {
+  return new Promise((resolve) => {
+    let u; try { u = new URL(url); } catch (e) { return resolve({ error: e.message }); }
+    const req = https.request(
+      { method, hostname: u.hostname, path: u.pathname + u.search, headers },
+      (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve({
+          status: res.statusCode, headers: res.headers,
+          setCookie: res.headers['set-cookie'] || [],
+          body: Buffer.concat(chunks).toString('utf8'),
+          location: res.headers.location,
+        }));
+      });
+    req.on('error', e => resolve({ error: e.message }));
+    req.setTimeout(30000, () => { req.destroy(); resolve({ error: 'timeout' }); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+function cookieHeader(jar) { return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; '); }
+function mergeCookies(jar, setCookie) {
+  for (const sc of (setCookie || [])) { const m = /^([^=]+)=([^;]*)/.exec(sc); if (m) jar[m[1].trim()] = m[2]; }
+  return jar;
+}
+function multipartBody(boundary, fields) {
+  let s = '';
+  for (const [k, v] of Object.entries(fields)) {
+    s += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v == null ? '' : v}\r\n`;
+  }
+  return s + `--${boundary}--\r\n`;
+}
+
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
 const MAX_CANDLES = 150;
 const PRICE_MS    = 1000;
@@ -499,10 +534,10 @@ class PoWsClient {
     // The token auths but never streams (priceFrames stays 0) ⇒ it's IP-bound to
     // the capture machine. Try ONCE to capture a token from the SERVER's own IP
     // (browser strike) — instrumented via repairDiag so we see if it works or OOMs.
-    if (this._flaps === 3 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
+    if (this._flaps === 1 && this._priceFrames === 0 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
       this._triedRecapture = true;
-      err('🟧 OTC: token auths but never streams (IP-bound). Trying a one-time SERVER-IP recapture…');
-      this._repair();
+      err('🟧 OTC: token auths but never streams (IP-bound). Minting a SERVER-IP token via HTTP login…');
+      this._repair();                 // httpLogin first, browser fallback
       return;                         // repair owns reconnection; don't double-connect
     }
     this._scheduleReconnect(delay);
@@ -556,9 +591,12 @@ class PoWsClient {
     this.authed = false;
     this._stopHeartbeat();
     this._reportStatus({ connected: false, loggedIn: false, phase: 'repairing' });
-    log('self-repair: re-capturing session token…');
+    log('self-repair: minting a server-IP token…');
     try {
-      const ok = await this.recaptureToken();
+      // Free path first: raw HTTP login (no browser). Browser strike only as a
+      // fallback (it OOMs on 512 MB, so it usually won't help there).
+      let ok = await this.httpLogin();
+      if (!ok) ok = await this.recaptureToken();
       if (!ok) throw new Error('recapture produced no token');
       this._repairFails = 0; this._repairOpenUntil = 0;
       this._health.repairs++; this._health.lastRepairAt = new Date().toISOString();
@@ -582,6 +620,68 @@ class PoWsClient {
       } else {
         setTimeout(() => this._repair(), 15_000);   // quick retry within the 3-try window
       }
+    }
+  }
+
+  // ── Raw HTTP login from the SERVER (no browser) → server-IP ci_session token ──
+  // Replicates the browser's login POST. If PO's anti-bot `token` is a page nonce
+  // (not a live reCAPTCHA), this works free; if it needs a live captcha token,
+  // repairDiag will show 'no-ci_session' and we'll know.
+  async httpLogin() {
+    if (!PO_EMAIL || !PO_PASSWORD) { await this._reportRepair('http:no-credentials'); return false; }
+    const ua = this._ua();
+    const uid = ((/"uid":"?(\d+)/.exec(activeAuth) || /"uid":"?(\d+)/.exec(PO_AUTH) || [])[1]) || '';
+    const baseHeaders = {
+      'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    };
+    try {
+      await this._reportRepair('http:GET-login-page');
+      const g = await httpReq('GET', PO_LOGIN_URL, { headers: baseHeaders });
+      if (g.error) { await this._reportRepair('http:GET-error:' + g.error); return false; }
+      const jar = mergeCookies({}, g.setCookie);
+      const html = g.body || '';
+      // Cloudflare challenge?
+      if (g.status === 403 || g.status === 503 || /cf-browser-verification|challenge-platform|Just a moment/i.test(html)) {
+        await this._reportRepair('http:cloudflare-challenge (status ' + g.status + ')'); return false;
+      }
+      const token = (/name=["']token["'][^>]*value=["']([^"']+)/i.exec(html) ||
+                     /["']token["']\s*:\s*["']([^"']+)/i.exec(html) || [])[1] || '';
+      const regPage = (/name=["']register_page["'][^>]*value=["']([^"']+)/i.exec(html) ||
+                       /register_page["']?\s*[:=]\s*["']?([0-9]+)/i.exec(html) || [])[1] || '';
+      await this._reportRepair(`http:got-page status=${g.status} token=${token ? 'Y' : 'N'} reg=${regPage ? 'Y' : 'N'} cookies=${Object.keys(jar).length}`);
+
+      const boundary = '----poB' + Math.random().toString(36).slice(2);
+      const body = multipartBody(boundary, {
+        submitLogin: '1', email: PO_EMAIL, password: PO_PASSWORD,
+        'g-recaptcha-response': '', register_page: regPage, token,
+      });
+      const p = await httpReq('POST', PO_LOGIN_URL, {
+        headers: {
+          ...baseHeaders,
+          'Content-Type': 'multipart/form-data; boundary=' + boundary,
+          'Content-Length': Buffer.byteLength(body),
+          Origin: 'https://pocketoption.com', Referer: PO_LOGIN_URL,
+          Cookie: cookieHeader(jar),
+        }, body,
+      });
+      if (p.error) { await this._reportRepair('http:POST-error:' + p.error); return false; }
+      mergeCookies(jar, p.setCookie);
+      const ci = jar['ci_session'];
+      if (ci && ci.length > 40) {
+        const session = decodeURIComponent(ci);
+        activeAuth = JSON.stringify(['auth', {
+          session, isDemo: 0, uid: Number(uid) || 0, platform: 2, isFastHistory: true, isOptimized: true,
+        }]);
+        await saveToken(activeAuth, activeWsUrl);
+        await this._reportRepair('http:LOGIN-OK ✅ server-IP token minted');
+        return true;
+      }
+      await this._reportRepair(`http:no-ci_session (POST status ${p.status}) — login rejected`);
+      return false;
+    } catch (e) {
+      await this._reportRepair('http:error:' + (e.message || '').slice(0, 80));
+      return false;
     }
   }
 
