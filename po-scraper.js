@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-7';
+const BUILD = '2captcha-8';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -116,13 +116,14 @@ function multipartBody(boundary, fields) {
 // token (24/7 on Render, no PC needed). Supports v3 (score-based, needs an
 // action) and v2. Submit → poll res.php every 5s → return the solved token.
 // Throws on any failure so the caller can retry / back off.
-async function solveRecaptcha({ sitekey, pageurl, action, version }) {
+async function solveRecaptcha({ sitekey, pageurl, action, version, invisible }) {
   if (!CAPTCHA_API_KEY) throw new Error('no CAPTCHA_API_KEY');
   const q = new URLSearchParams({
     key: CAPTCHA_API_KEY, method: 'userrecaptcha',
     googlekey: sitekey, pageurl, json: '1',
   });
   if (version === 'v3') { q.set('version', 'v3'); q.set('action', action || 'login'); q.set('min_score', '0.3'); }
+  else if (invisible) { q.set('invisible', '1'); }   // reCAPTCHA v2 invisible
   const sub = await httpReq('GET', 'https://2captcha.com/in.php?' + q.toString());
   if (sub.error) throw new Error('in.php ' + sub.error);
   let id;
@@ -710,21 +711,28 @@ class PoWsClient {
       // ── Solve reCAPTCHA via 2captcha so PO accepts a server-side login. ──
       // v3 sitekey lives in  recaptcha/api.js?render=SITEKEY  (invisible, score-based);
       // v2 sitekey in  data-sitekey / grecaptcha.render|execute('SITEKEY').
-      let captcha = '';
+      let captcha = '', captchaVersion = '';
       if (CAPTCHA_API_KEY) {
-        const v3key = (/recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]+)/i.exec(html) || [])[1];
-        const v2key = (/data-sitekey=["']([\w-]+)/i.exec(html) ||
-                       /grecaptcha\.(?:execute|render)\(\s*["']([\w-]+)["']/i.exec(html) || [])[1];
-        const sitekey = v3key || v2key;
-        const version = v3key ? 'v3' : 'v2';
-        const action  = (await this._discoverRecaptchaAction(html)) || 'login';
+        const sitekey = (/data-sitekey=["']([\w-]+)/i.exec(html) ||
+                         /['"]sitekey['"]\s*:\s*["']([\w-]+)/i.exec(html) ||
+                         /grecaptcha\.(?:enterprise\.)?(?:execute|render)\(\s*["']([\w-]+)["']/i.exec(html) ||
+                         /recaptcha\/api\.js\?[^"'<>]*\brender=([\w-]{20,})/i.exec(html) || [])[1] || '';
+        // Decide v2 vs v3 by HOW the page USES grecaptcha, not just the loader URL:
+        //   render(widget)         ⇒ v2 (checkbox/invisible puzzle — real solve)
+        //   execute(key,{action})  ⇒ v3 (score-based)
+        const hasExec = /grecaptcha\.(?:enterprise\.)?execute\s*\([^)]*action/i.test(html);
+        const hasRender = /grecaptcha\.(?:enterprise\.)?render\s*\(/i.test(html);
+        const version = hasExec ? 'v3' : (hasRender ? 'v2' : 'v3');
+        captchaVersion = version;
+        const invisible = version === 'v2' && /size\s*[:=]\s*["']?invisible|data-size=["']invisible/i.test(html);
+        const action  = version === 'v3' ? ((await this._discoverRecaptchaAction(html)) || 'login') : '';
         if (!sitekey) {
           await this._reportRepair('http:no-sitekey-on-page (login will likely be rejected)');
         } else {
-          await this._reportRepair(`http:solving-recaptcha ${version} key=${sitekey.slice(0, 12)}… act=${action}`);
+          await this._reportRepair(`http:solving-recaptcha ${version}${invisible ? '-invis' : ''} key=${sitekey.slice(0, 12)}… act=${action || '-'}`);
           for (let attempt = 1; attempt <= 3 && !captcha; attempt++) {
             try {
-              captcha = await solveRecaptcha({ sitekey, pageurl: PO_LOGIN_URL, action, version });
+              captcha = await solveRecaptcha({ sitekey, pageurl: PO_LOGIN_URL, action, version, invisible });
             } catch (e) {
               await this._reportRepair(`http:captcha-try${attempt}/3-fail:${(e.message || '').slice(0, 50)}`);
             }
@@ -756,7 +764,10 @@ class PoWsClient {
       fields.email = PO_EMAIL;
       fields.password = PO_PASSWORD;
       fields.submitLogin = '1';
-      fields['g-recaptcha-response'] = '';
+      // v2 response belongs in g-recaptcha-response; v3 goes in `token` with an
+      // empty g-recaptcha-response (matching the real browser). Fill `token` too
+      // since PO's browser POST carried the solution there.
+      fields['g-recaptcha-response'] = captchaVersion === 'v2' ? captcha : '';
       fields.token = captcha;
       if (regPage && !fields.register_page) fields.register_page = regPage;
       await this._reportRepair('http:form-fields [' + Object.keys(fields).join(',') + ']');
