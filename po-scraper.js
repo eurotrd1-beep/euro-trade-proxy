@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'browser-1';
+const BUILD = 'browser-2';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -952,27 +952,49 @@ class PoWsClient {
         catch (_) { return ''; }
       };
 
+      const pageUrl = () => { try { return page.url() || ''; } catch (_) { return ''; } };
+      const onLogin = (u) => /\/(login|sign-in)\/?($|[?#])/i.test(u || pageUrl());
+
       await this._reportRepair('browser-launched');
       await page.goto(PO_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 3500));
+      await page.waitForSelector('input[type="password"], input[name="password"], #password', { timeout: 20_000 }).catch(() => {});
       await this._reportRepair('login-page-loaded');
-      await page.type('input[type="email"], input[name="email"], #email', PO_EMAIL, { delay: 30 }).catch(() => {});
-      await page.type('input[type="password"], input[name="password"], #password', PO_PASSWORD, { delay: 30 }).catch(() => {});
-      await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button'); if (b) b.click(); }).catch(() => {});
+
+      // Fill credentials via the DOM (fires input/change so the framework sees them).
+      const filled = await page.evaluate((em, pw) => {
+        const q = (s) => document.querySelector(s);
+        const e = q('input[type="email"]') || q('input[name="email"]') || q('#email');
+        const p = q('input[type="password"]') || q('input[name="password"]') || q('#password');
+        const set = (el, v) => { if (!el) return; el.focus(); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+        set(e, em); set(p, pw);
+        return { e: !!e, p: !!p };
+      }, PO_EMAIL, PO_PASSWORD).catch(() => ({ e: false, p: false }));
+      await this._reportRepair('creds-filled email=' + (filled.e ? 'Y' : 'N') + ' pass=' + (filled.p ? 'Y' : 'N'));
+
+      // Submit: click the submit button, and press Enter as a fallback.
+      await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button, button.btn'); if (b) b.click(); }).catch(() => {});
+      await page.keyboard.press('Enter').catch(() => {});
       await this._reportRepair('login-submitted');
 
-      // Success = we leave the /login/ page. Then read the server-IP ci_session.
-      await page.waitForFunction(() => !/\/(login|sign-in)\/?($|[?#])/i.test(location.href), { timeout: 45_000 }).catch(() => {});
-      const url2 = (await page.url().catch(() => '')) || '';
-      await this._reportRepair('post-login url=' + url2.replace(/^https?:\/\/[^/]+/, '').slice(0, 40));
-      let ci = await grabCi();
+      // Success = we leave /login/  OR  a ci_session cookie appears. Poll both up to 45s.
+      let ci = '';
+      const t0 = Date.now();
+      while (Date.now() - t0 < 45_000) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (authFrame) break;
+        if (!onLogin()) break;
+        ci = await grabCi();
+        if (ci && ci.length > 40) break;
+      }
+      if (!ci) ci = await grabCi();
+      await this._reportRepair('post-login url=' + pageUrl().replace(/^https?:\/\/[^/]+/, '').slice(0, 30) + ' ci=' + (ci ? ci.length : 0));
 
-      // If we don't have the WS auth yet, open the chart so the price WS connects.
-      if (!authFrame) {
+      // If we still have no server-IP session, open the chart to trigger the price WS.
+      if (!authFrame && !(ci && ci.length > 40)) {
         const chartUrl = process.env.PO_CHART_URL || 'https://pocketoption.com/en/cabinet/quick-high-low/';
         await page.goto(chartUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
-        const t0 = Date.now();
-        while (Date.now() - t0 < 30_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+        const t1 = Date.now();
+        while (Date.now() - t1 < 30_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
         if (!ci) ci = await grabCi();
       }
 
