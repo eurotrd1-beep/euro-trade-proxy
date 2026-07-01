@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-3';
+const BUILD = '2captcha-4';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -773,11 +773,17 @@ class PoWsClient {
       // cookies it set + a text snippet of the response body (error message /
       // re-rendered form). This tells us if it's captcha-score, credentials,
       // an extra field, or a redirect.
-      const cookieNames = Object.keys(jar).join(',');
-      const bodyText = (p.body || '').replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      // PO (CodeIgniter) puts the flash error in the `redirect_message` cookie —
+      // decode it (URL- then base64-decode) to get the REAL reason. Also scan the
+      // re-rendered page for any visible error/validation text as a fallback.
+      let redir = jar['redirect_message'] || '';
+      try { redir = decodeURIComponent(redir); } catch (_) {}
+      if (/^[A-Za-z0-9+/=]{20,}$/.test(redir)) { try { redir = Buffer.from(redir, 'base64').toString('utf8'); } catch (_) {} }
+      const raw = p.body || '';
+      const em = /class="[^"]*(?:error|alert|danger|invalid|message)[^"]*"[^>]*>\s*([^<]{3,160})/i.exec(raw);
+      const errText = (em ? em[1] : '').replace(/\s+/g, ' ').trim();
       await this._reportRepair(
-        `http:no-ci (status ${p.status}) loc=${p.location || '-'} cookies=[${cookieNames}] body="${bodyText}"`);
+        `http:no-ci status=${p.status} msg="${redir.replace(/\s+/g, ' ').slice(0, 200)}" err="${errText.slice(0, 120)}"`);
       return false;
     } catch (e) {
       await this._reportRepair('http:error:' + (e.message || '').slice(0, 80));
