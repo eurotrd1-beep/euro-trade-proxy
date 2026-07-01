@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-4';
+const BUILD = 'allassets-5';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -144,7 +144,7 @@ async function solveRecaptcha({ sitekey, pageurl, action, version, invisible }) 
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
 const MAX_CANDLES = 150;
-const PRICE_MS    = 1000;
+const PRICE_MS    = 700;    // price flush cadence (sub-second freshness)
 const MAX_LOGIN_FAILS = 3;
 
 const log  = (...a) => console.log('[OTC]', ...a);
