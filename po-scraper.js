@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-5';
+const BUILD = 'allassets-6';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -179,6 +179,10 @@ const PoProtocol = {
   // id → symbol map, learned from updateAssets (live ticks may use numeric ids).
   idMap: {},
 
+  // (diag) raw catalogue entries — one real asset + one OTC — to locate is_open.
+  _sampleReal: null,
+  _sampleOtc: null,
+
   // Internal symbol = PO's exact asset symbol with ':' stripped (NO upper-casing —
   // PO uses lowercase "_otc", e.g. "EURUSD_otc", "#AAPL_otc"). No ':' means the
   // TradingView pairs-listener always ignores it.
@@ -258,6 +262,9 @@ const PoProtocol = {
         if (!out.assets.some(x => x.symbol === symbol)) {
           out.assets.push({ symbol, name, type: rawType, isOtc, category });
         }
+        // (diag) capture one real + one OTC raw entry to locate PO's is_open flag.
+        if (!isOtc && !this._sampleReal) this._sampleReal = a;
+        else if (isOtc && !this._sampleOtc) this._sampleOtc = a;
       }
       return out;
     }
@@ -619,6 +626,11 @@ class PoWsClient {
       // Cache the OTC asset catalogue (PO sends updateAssets on connect) so
       // "جلب الأزواج" can list pairs any time, not only during a scan window.
       for (const a of res.assets) this._assetMap.set(a.symbol, a);
+      // (diag) publish raw sample entries once so we can locate PO's is_open flag.
+      if (!this._sampleReported && (this.proto._sampleReal || this.proto._sampleOtc)) {
+        this._sampleReported = true;
+        this._reportAssetSamples();
+      }
     }
     // PO chart history → seed the candle series immediately (full chart at once).
     if (res.history && res.history.ticks && res.history.ticks.length) {
@@ -952,6 +964,21 @@ class PoWsClient {
     }
     await this._reportRepair('http:action=NOT-FOUND scripts=' + srcs.length + ' snip="' + snip.slice(0, 190) + '"');
     return '';
+  }
+
+  // (diag) publish raw catalogue sample entries to configs/otc_debug.
+  async _reportAssetSamples() {
+    if (!db) return;
+    try {
+      await db.from('configs').upsert({
+        id: 'otc_debug',
+        data: {
+          real: this.proto._sampleReal,
+          otc: this.proto._sampleOtc,
+          at: new Date().toISOString(),
+        },
+      });
+    } catch (_) {}
   }
 
   // Live recapture-stage reporter → otc_status.repairDiag (so progress/failure of
