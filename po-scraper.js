@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-3';
+const BUILD = 'allassets-4';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -332,10 +332,15 @@ class CandleStore {
   // it never clobbers a healthy live series.
   seedHistory(symbol, ticks) {
     if (!Array.isArray(ticks) || !ticks.length) return 0;
-    let seeded = 0;
+    let changed = 0;
     for (const iv of IVS) {
       const ivSec = ivToSeconds(iv);
+      const key = `${symbol}_${iv}`;
+      const before = (this.candles[key] || []).length;
+      // Start from what we already have, then MERGE the history ticks in (so an
+      // older-history backfill prepends, and live candles are preserved).
       const map = new Map();
+      for (const c of (this.candles[key] || [])) map.set(c.t, { ...c });
       for (const t of ticks) {
         const ts = Number(t[0]); const price = Number(t[1]);
         if (!isFinite(ts) || !isFinite(price) || price <= 0) continue;
@@ -345,12 +350,21 @@ class CandleStore {
         if (!c) map.set(cTime, { t: cTime, o: price, h: price, l: price, c: price });
         else { if (price > c.h) c.h = price; if (price < c.l) c.l = price; c.c = price; }
       }
-      const built = [...map.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
-      const key = `${symbol}_${iv}`;
-      const existing = this.candles[key] || [];
-      if (built.length > existing.length) { this.candles[key] = built; this._schedSave(key); seeded++; }
+      const merged = [...map.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
+      this.candles[key] = merged;
+      if (merged.length !== before) { this._schedSave(key); changed++; }
     }
-    return seeded;
+    return changed;
+  }
+
+  // Oldest stored candle time for a symbol's 1m series (for history backfill).
+  oldest1m(symbol) {
+    const arr = this.candles[`${symbol}_1m`];
+    return (arr && arr.length) ? arr[0].t : 0;
+  }
+  count1m(symbol) {
+    const arr = this.candles[`${symbol}_1m`];
+    return arr ? arr.length : 0;
   }
 
   _tickIv(symbol, iv, price) {
@@ -594,6 +608,7 @@ class PoWsClient {
         setTimeout(() => this._subscribeAll(), 800);  // PO is ready now → subscribe
         this._startHeartbeat();       // keep the session "active"
         this._startWatchdog();        // detect a silent death even while "connected"
+        this._startBackfill();        // fill each chart to a full 150 candles
       }
     }
     if (gotPrices) {
@@ -669,6 +684,7 @@ class PoWsClient {
   _clearWs() {
     this._stopHeartbeat();
     this._stopWatchdog();
+    this._stopBackfill();
     if (this.ws) { try { this.ws.removeAllListeners(); this.ws.terminate(); } catch (_) {} this.ws = null; }
   }
 
@@ -1166,6 +1182,35 @@ class PoWsClient {
   }
 
   _stopHeartbeat() { if (this._hbTimer) { clearTimeout(this._hbTimer); this._hbTimer = null; } }
+
+  // ── History backfill ───────────────────────────────────────────────────────
+  // PO's changeSymbol only returns ~40 candles. To reach a full 150-candle chart
+  // like the platform, ask PO for the window BEFORE our oldest candle — ONE
+  // request every 2.5s (never a burst) so the precious 24/7 socket stays safe.
+  // Responses arrive as normal history frames → CandleStore.seedHistory merges
+  // them. Self-stops per pair once it hits 150 (or PO returns nothing new twice).
+  _startBackfill() {
+    this._stopBackfill();
+    this._backfillTries = this._backfillTries || {};
+    this._histIndex = this._histIndex || 1000000;
+    this._backfillTimer = setInterval(() => {
+      if (!this.authed || this._repairing) return;
+      if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
+      for (const sym of this.enabled) {
+        const n = this.store.count1m(sym);
+        if (n === 0 || n >= MAX_CANDLES) continue;      // empty (no seed yet) or already full
+        const stateKey = sym + ':' + n;
+        if ((this._backfillTries[stateKey] || 0) >= 2) continue;  // no new data at this depth
+        this._backfillTries[stateKey] = (this._backfillTries[stateKey] || 0) + 1;
+        this._histIndex++;
+        const oldest = this.store.oldest1m(sym);
+        this._send('42["loadHistoryPeriod",{"asset":"' + sym +
+          '","period":60,"time":' + oldest + ',"index":' + this._histIndex + ',"offset":9000}]');
+        return;   // exactly one request per tick
+      }
+    }, 2500);
+  }
+  _stopBackfill() { if (this._backfillTimer) { clearInterval(this._backfillTimer); this._backfillTimer = null; } }
 
   _send(frame) { try { if (this.ws && this.ws.readyState === WebSocketLib.OPEN) this.ws.send(frame); } catch (_) {} }
 
