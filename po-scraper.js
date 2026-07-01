@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-6';
+const BUILD = '2captcha-7';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -822,7 +822,16 @@ class PoWsClient {
     const srcs = []; const re = /<script[^>]+src=["']([^"']+)["']/gi; let s;
     while ((s = re.exec(html))) srcs.push(s[1]);
     const pri = srcs.filter(u => /(app|main|login|auth|common|bundle|vendor|custom|script)[\w.-]*\.js|recaptcha/i.test(u));
-    const list = [...new Set([...pri, ...srcs])].slice(0, 6);
+    const list = [...new Set([...pri, ...srcs])].slice(0, 8);
+    // While hunting, grab the FIRST raw snippet around an execute/render call so
+    // that if the action regex misses (minified/var-based), we can still read it.
+    let snip = '';
+    const grab = (txt, src) => {
+      if (snip) return;
+      const i = (txt || '').search(/grecaptcha|\.execute\s*\(|recaptcha[^"'<>]{0,6}render|['"]action['"]\s*:/i);
+      if (i >= 0) snip = src + '»' + (txt.slice(Math.max(0, i - 10), i + 170).replace(/\s+/g, ' '));
+    };
+    grab(html, 'html');
     for (let u of list) {
       if (u.startsWith('//')) u = 'https:' + u;
       else if (u.startsWith('/')) u = 'https://pocketoption.com' + u;
@@ -831,8 +840,9 @@ class PoWsClient {
       if (r.error || !r.body) continue;
       a = scan(r.body);
       if (a) { await this._reportRepair('http:action=' + a + ' (' + u.split('/').pop().split('?')[0].slice(0, 24) + ')'); return a; }
+      grab(r.body, u.split('/').pop().split('?')[0].slice(0, 18));
     }
-    await this._reportRepair('http:action=NOT-FOUND (defaulting to login)');
+    await this._reportRepair('http:action=NOT-FOUND scripts=' + srcs.length + ' snip="' + snip.slice(0, 190) + '"');
     return '';
   }
 
