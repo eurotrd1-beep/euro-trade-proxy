@@ -440,11 +440,20 @@ class PoWsClient {
     const msg = data.toString();
 
     // Engine.IO ping → pong.
-    if (msg === '2') { try { this.ws.send('3'); } catch (_) {} return; }
+    if (msg === '2') { try { this.ws.send('3'); } catch (_) {} if (this._diagPing) log('⇄ server ping → pong'); return; }
     if (msg === '3') return;
 
-    // Engine.IO open handshake → connect to default namespace.
-    if (msg[0] === '0') { try { this.ws.send('40'); } catch (_) {} return; }
+    // Engine.IO open handshake → connect to default namespace + note ping timing.
+    if (msg[0] === '0') {
+      try {
+        const o = JSON.parse(msg.slice(1));
+        this._pingInterval = o.pingInterval; this._pingTimeout = o.pingTimeout;
+        this._diagPing = true;
+        log(`engine.io open: pingInterval=${o.pingInterval} pingTimeout=${o.pingTimeout}`);
+      } catch (_) {}
+      try { this.ws.send('40'); } catch (_) {}
+      return;
+    }
 
     // Socket.IO connected → send auth, then subscribe to enabled symbols.
     if (msg.startsWith('40')) {
@@ -808,20 +817,12 @@ class PoWsClient {
   _beat() {
     if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
     this._beatCount++;
-    // 1) Engine.IO ping + PO's app-level ping ("ps") — the real client's keep-alive.
-    this._send('2');
+    // PO's app-level keep-alive is just "ps" — NO client Engine.IO ping (the real
+    // browser never sends '2'; it only PONGs the server). Sending '2' seems to make
+    // PO drop us ~at the first beat, so we don't.
     this._send('42["ps"]');
-    // 2) Any extra captured heartbeat frames (override via PO_HEARTBEAT).
     for (const f of PO_HEARTBEAT) this._send(typeof f === 'string' ? f : JSON.stringify(f));
-    // 3) Actively "use" the session: re-subscribe to every enabled symbol.
-    for (const sym of this.enabled) {
-      this._send(PO_SUBSCRIBE ? PO_SUBSCRIBE.replace(/\{symbol\}/g, sym) : '42["subfor","' + sym + '"]');
-    }
-    // 4) Proactive session touch: re-auth occasionally (every ~10 beats).
-    if (this._beatCount % 10 === 0) {
-      const af = this.buildAuthFrame();
-      if (af) this._send(af);
-    }
+    if (this._diagPing) log('beat #' + this._beatCount + ': ps');
   }
 
   // Subscribe to every enabled symbol the way the real client does:
