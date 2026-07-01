@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-8';
+const BUILD = '2captcha-9';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -683,9 +683,18 @@ class PoWsClient {
     if (!PO_EMAIL || !PO_PASSWORD) { await this._reportRepair('http:no-credentials'); return false; }
     const ua = this._ua();
     const uid = ((/"uid":"?(\d+)/.exec(activeAuth) || /"uid":"?(\d+)/.exec(PO_AUTH) || [])[1]) || '';
+    // Full Chrome-like header set — a bare UA is an obvious bot tell; PO/Qrator
+    // can silently reject logins that miss the sec-* client hints. (No
+    // Accept-Encoding: httpReq doesn't decompress, so we must get plain text.)
+    const chromeMajor = (/Chrome\/(\d+)/.exec(ua) || [, '150'])[1];
     const baseHeaders = {
-      'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'User-Agent': ua,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'sec-ch-ua': `"Chromium";v="${chromeMajor}", "Not(A:Brand";v="24", "Google Chrome";v="${chromeMajor}"`,
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+      'Upgrade-Insecure-Requests': '1',
     };
     try {
       await this._reportRepair('http:GET-login-page');
@@ -694,7 +703,8 @@ class PoWsClient {
       const jar = {};
       const seed = process.env.PO_LOGIN_COOKIE || 'no-login-captcha=1; lang=en';
       for (const p of seed.split(';')) { const m = /^\s*([^=]+)=([^;]*)/.exec(p); if (m) jar[m[1].trim()] = m[2].trim(); }
-      const g = await httpReq('GET', PO_LOGIN_URL, { headers: { ...baseHeaders, Cookie: cookieHeader(jar) } });
+      const g = await httpReq('GET', PO_LOGIN_URL, { headers: { ...baseHeaders, Cookie: cookieHeader(jar),
+        'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-User': '?1', 'Sec-Fetch-Dest': 'document' } });
       if (g.error) { await this._reportRepair('http:GET-error:' + g.error); return false; }
       mergeCookies(jar, g.setCookie);
       const html = g.body || '';
@@ -779,6 +789,8 @@ class PoWsClient {
           'Content-Type': 'multipart/form-data; boundary=' + boundary,
           'Content-Length': Buffer.byteLength(body),
           Origin: 'https://pocketoption.com', Referer: PO_LOGIN_URL,
+          'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-User': '?1', 'Sec-Fetch-Dest': 'document',
           Cookie: cookieHeader(jar),
         }, body,
       });
