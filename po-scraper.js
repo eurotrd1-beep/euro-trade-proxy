@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-5';
+const BUILD = '2captcha-6';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -717,7 +717,7 @@ class PoWsClient {
                        /grecaptcha\.(?:execute|render)\(\s*["']([\w-]+)["']/i.exec(html) || [])[1];
         const sitekey = v3key || v2key;
         const version = v3key ? 'v3' : 'v2';
-        const action  = (/grecaptcha\.execute\(\s*["'][\w-]+["']\s*,\s*\{[^}]*\baction\s*:\s*["']([^"']+)/i.exec(html) || [])[1] || 'login';
+        const action  = (await this._discoverRecaptchaAction(html)) || 'login';
         if (!sitekey) {
           await this._reportRepair('http:no-sitekey-on-page (login will likely be rejected)');
         } else {
@@ -803,6 +803,37 @@ class PoWsClient {
       await this._reportRepair('http:error:' + (e.message || '').slice(0, 80));
       return false;
     }
+  }
+
+  // Find the reCAPTCHA v3 action PO uses (it's passed to grecaptcha.execute()).
+  // The token 2captcha returns is bound to this action; if it doesn't match what
+  // PO's backend expects, PO silently rejects the login. Usually not inline in the
+  // HTML — it's in a JS bundle — so fetch the likely scripts and grep them.
+  async _discoverRecaptchaAction(html) {
+    const rx = [
+      /grecaptcha\.(?:enterprise\.)?execute\([^)]*?\baction\s*:\s*["']([^"']+)["']/i,
+      /\.execute\([^,]+,\s*\{\s*action\s*:\s*["']([^"']+)["']/i,
+      /["']action["']\s*:\s*["'](login|log_in|signin|sign_in|submit|submit_login|auth|authenticate|homepage|home)["']/i,
+    ];
+    const scan = (txt) => { for (const r of rx) { const m = r.exec(txt || ''); if (m) return m[1]; } return ''; };
+    let a = scan(html);
+    if (a) { await this._reportRepair('http:action=' + a + ' (inline)'); return a; }
+    // Collect <script src> URLs, prioritise likely app/login/recaptcha bundles.
+    const srcs = []; const re = /<script[^>]+src=["']([^"']+)["']/gi; let s;
+    while ((s = re.exec(html))) srcs.push(s[1]);
+    const pri = srcs.filter(u => /(app|main|login|auth|common|bundle|vendor|custom|script)[\w.-]*\.js|recaptcha/i.test(u));
+    const list = [...new Set([...pri, ...srcs])].slice(0, 6);
+    for (let u of list) {
+      if (u.startsWith('//')) u = 'https:' + u;
+      else if (u.startsWith('/')) u = 'https://pocketoption.com' + u;
+      else if (!/^https?:/i.test(u)) u = 'https://pocketoption.com/' + u;
+      const r = await httpReq('GET', u, { headers: { 'User-Agent': this._ua() } });
+      if (r.error || !r.body) continue;
+      a = scan(r.body);
+      if (a) { await this._reportRepair('http:action=' + a + ' (' + u.split('/').pop().split('?')[0].slice(0, 24) + ')'); return a; }
+    }
+    await this._reportRepair('http:action=NOT-FOUND (defaulting to login)');
+    return '';
   }
 
   // Live recapture-stage reporter → otc_status.repairDiag (so progress/failure of
