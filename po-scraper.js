@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-2';
+const BUILD = 'allassets-3';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -228,12 +228,15 @@ const PoProtocol = {
     let body = node;
     if (Array.isArray(node) && typeof node[0] === 'string') body = node[1]; // ["event",payload]
 
-    // history object: {asset, history:[[ts,price],...]}
+    // history object: {asset, history:[[ts,price],...]} — PO's chart history.
+    // Return the FULL tick array so we can seed the candle series immediately
+    // (so a freshly-enabled pair shows ~150 candles at once, not 3-4).
     if (body && typeof body === 'object' && !Array.isArray(body) && Array.isArray(body.history)) {
       const sym = this.normalize(body.asset || body.symbol);
       const h = body.history;
       const last = h.length ? h[h.length - 1] : null;
       if (sym && last && typeof last[1] === 'number' && last[1] > 0) out.prices[sym] = last[1];
+      if (sym && h.length) out.history = { symbol: sym, ticks: h, period: body.period };
       return out;
     }
 
@@ -320,6 +323,34 @@ class CandleStore {
     if (price == null || !isFinite(price) || price <= 0) return;
     if (this._lastPrice[symbol] !== price) { this._lastPrice[symbol] = price; this.lastChange[symbol] = Date.now(); }
     for (const iv of IVS) this._tickIv(symbol, iv, price);
+  }
+
+  // Seed a symbol's candle series from PO's chart history ([[ts,price],…] ticks),
+  // aggregated into OHLC per timeframe. Used when a pair connects so it shows a
+  // full chart immediately instead of building 3-4 candles from live ticks.
+  // Only adopts a timeframe when it yields MORE candles than we already have, so
+  // it never clobbers a healthy live series.
+  seedHistory(symbol, ticks) {
+    if (!Array.isArray(ticks) || !ticks.length) return 0;
+    let seeded = 0;
+    for (const iv of IVS) {
+      const ivSec = ivToSeconds(iv);
+      const map = new Map();
+      for (const t of ticks) {
+        const ts = Number(t[0]); const price = Number(t[1]);
+        if (!isFinite(ts) || !isFinite(price) || price <= 0) continue;
+        const sec = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);   // ms→s
+        const cTime = Math.floor(sec / ivSec) * ivSec;
+        const c = map.get(cTime);
+        if (!c) map.set(cTime, { t: cTime, o: price, h: price, l: price, c: price });
+        else { if (price > c.h) c.h = price; if (price < c.l) c.l = price; c.c = price; }
+      }
+      const built = [...map.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
+      const key = `${symbol}_${iv}`;
+      const existing = this.candles[key] || [];
+      if (built.length > existing.length) { this.candles[key] = built; this._schedSave(key); seeded++; }
+    }
+    return seeded;
   }
 
   _tickIv(symbol, iv, price) {
@@ -573,6 +604,15 @@ class PoWsClient {
       // Cache the OTC asset catalogue (PO sends updateAssets on connect) so
       // "جلب الأزواج" can list pairs any time, not only during a scan window.
       for (const a of res.assets) this._assetMap.set(a.symbol, a);
+    }
+    // PO chart history → seed the candle series immediately (full chart at once).
+    if (res.history && res.history.ticks && res.history.ticks.length) {
+      const n = this.store.seedHistory(res.history.symbol, res.history.ticks);
+      this._histLogged = this._histLogged || 0;
+      if (this._histLogged < 10) {
+        this._histLogged++;
+        log(`history ${res.history.symbol}: ${res.history.ticks.length} ticks → seeded ${n} tf(s)`);
+      }
     }
     // Sample a few genuinely-unknown events (ignore the "_placeholder" binary
     // headers — those are normal; the real data is the following binary frame).
