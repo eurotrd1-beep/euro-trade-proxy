@@ -513,9 +513,11 @@ class PoWsClient {
       // "جلب الأزواج" can list pairs any time, not only during a scan window.
       for (const a of res.assets) this._assetMap.set(a.symbol, a);
     }
-    // Sample a few events that yielded nothing — helps tune the parser to PO.
-    if (!gotPrices && !gotAssets && this._unknownSamples < 10 && /otc|stream|asset|price/i.test(raw)) {
-      this._unknownSamples++; log('event yielded no price (sample):', raw.slice(0, 220));
+    // Sample a few genuinely-unknown events (ignore the "_placeholder" binary
+    // headers — those are normal; the real data is the following binary frame).
+    if (!gotPrices && !gotAssets && this._unknownSamples < 6 &&
+        !/_placeholder/.test(raw) && /otc|asset|price/i.test(raw)) {
+      this._unknownSamples++; log('event yielded no price (sample):', raw.slice(0, 200));
     }
   }
 
