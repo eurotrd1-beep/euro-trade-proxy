@@ -280,7 +280,9 @@ class PoWsClient {
     this._reconnecting = false;
     this._reconnectTimer = null;
     this._authedAt = 0;       // when the current session authed (for flap detection)
-    this._flaps = 0;          // consecutive "authed then dropped fast" cycles
+    this._connectedAt = 0;    // when the socket opened (for session-length check)
+    this._flaps = 0;          // consecutive short-lived sessions (flapping)
+    this._triedRecapture = false;  // already tried a server-IP recapture this run?
     this._scanning = false;
     this._scanAssets = [];
     this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
@@ -354,6 +356,7 @@ class PoWsClient {
 
     ws.on('open', () => {
       this.connected = true;
+      this._connectedAt = Date.now();
       log('ws open — handshaking');
       this._reportStatus({ connected: true, loggedIn: false, phase: 'relogin' });
     });
@@ -448,41 +451,38 @@ class PoWsClient {
 
   _onClose(code) {
     const wasAuthed = this.authed;
-    const aliveMs = (wasAuthed && this._authedAt) ? (Date.now() - this._authedAt) : 0;
+    const aliveMs = this._connectedAt ? (Date.now() - this._connectedAt) : 0;
     this.connected = false; this.authed = false;
     this._clearWs();
 
     let delay, phase;
-    if (!wasAuthed) {
-      // Closed before any data ⇒ token rejected/expired.
-      this.loginFails++;
-      delay = this._backoffMs();
-      phase = this.loginFails >= MAX_LOGIN_FAILS ? 'login_failed' : 'reconnecting';
-    } else if (aliveMs < 6000) {
-      // Authed then dropped almost immediately = FLAPPING. Classic sign the SAME
-      // PO session is in use elsewhere (your browser), or PO is dropping us. Back
-      // off progressively so we never hammer PO (avoids an IP/session block).
-      this._flaps++;
-      delay = Math.min(60000, 5000 * this._flaps);
-      phase = this._flaps >= 5 ? 'login_failed' : 'reconnecting';
+    if (aliveMs >= 120000) {
+      // Genuinely stable for ≥2 min then dropped → normal quick reconnect.
+      this._flaps = 0; this.loginFails = 0; this._triedRecapture = false;
+      delay = 1000; phase = 'reconnecting';
     } else {
-      // Had a healthy session that dropped → quick, normal reconnect.
-      this._flaps = 0;
-      delay = 1000;
-      phase = 'reconnecting';
+      // ANY short-lived session (rejected, or authed-then-dropped) = flapping.
+      // Progressive backoff so we NEVER hammer PO (was hitting 1000+ reconnects).
+      if (!wasAuthed) this.loginFails++;
+      this._flaps++;
+      delay = Math.min(120000, 5000 * this._flaps);   // 5s,10s,…,cap 2min
+      phase = (this._flaps >= 4 || this.loginFails >= MAX_LOGIN_FAILS) ? 'login_failed' : 'reconnecting';
     }
 
-    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, aliveMs=${aliveMs}, flaps=${this._flaps})`);
+    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, aliveMs=${Math.round(aliveMs/1000)}s, flaps=${this._flaps})`);
     this._reportStatus({ connected: false, loggedIn: false, phase });
 
-    if (!wasAuthed && this.loginFails === MAX_LOGIN_FAILS) {
-      err('🟥 OTC: token rejected before any data — PO_AUTH likely expired. Re-capture with get-po-ssid.js.');
+    // Persistent flapping with a token that AUTHS but won't hold ⇒ the captured
+    // token is bound to the capture IP / shared with the browser. The real fix is
+    // a token captured FROM THE SERVER'S OWN IP — do it once automatically.
+    if (this._flaps === 4 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
+      this._triedRecapture = true;
+      err('🟧 OTC: token auths but keeps dropping (IP-bound/shared). Auto-capturing a SERVER-IP token…');
+      this._repair();                 // browser strike on Render → server-IP token → _connect
+      return;                         // don't also schedule a plain reconnect
     }
-    if (this._flaps === 5) {
-      err('🟧🟧🟧 OTC: connection keeps dropping right after auth (flapping) 🟧🟧🟧');
-      err('Almost always: the SAME Pocket Option session is open elsewhere (your browser).');
-      err('→ Log out of Pocket Option in your browser / close all PO tabs. Backing off now.');
-      err('🟧🟧🟧──────────────────────────────────────────────────────🟧🟧🟧');
+    if (this._flaps === 6 && !PO_EMAIL) {
+      err('🟧🟧 OTC: persistent flapping. Set PO_EMAIL/PO_PASSWORD so the server can capture its own token, or the session is IP-locked. 🟧🟧');
     }
     this._scheduleReconnect(delay);
   }
@@ -597,10 +597,17 @@ class PoWsClient {
       const cdp = await page.target().createCDPSession();
       await cdp.send('Network.enable');
       let authFrame = null, wsUrl = null;
-      cdp.on('Network.webSocketCreated', ({ url }) => { if (/po\.market|socket\.io/i.test(url)) wsUrl = url; });
-      cdp.on('Network.webSocketFrameSent', ({ response }) => {
+      const urlById = {};
+      const isApi = u => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
+      cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
+        urlById[requestId] = url;
+        if (isApi(url) && !wsUrl) wsUrl = url;
+      });
+      cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
         const d = (response && response.payloadData) || '';
-        if (/"auth"/.test(d) && !authFrame) authFrame = d;
+        const u = urlById[requestId] || '';
+        // Grab the PRICE-server auth (has "session"), NOT the chat "sessionToken".
+        if (/"auth"/.test(d) && /"session"/.test(d) && isApi(u)) { authFrame = d; wsUrl = u; }
       });
 
       await page.goto(PO_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
