@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'allassets-1';
+const BUILD = 'allassets-2';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -201,11 +201,13 @@ const PoProtocol = {
   classify(rawType, symRaw) {
     const t = String(rawType || '').toLowerCase();
     const s = String(symRaw || '').toLowerCase();
-    if (/curren|forex|\bfx\b/.test(t)) return 'currencies';
-    if (/commod/.test(t))              return 'commodities';
+    // Order matters: check crypto BEFORE currencies — "cryptocurrency" contains
+    // "curren", so a currencies-first test would misclassify all crypto.
+    if (/crypto|coin/.test(t))         return 'crypto';
+    if (/commod|metal/.test(t))        return 'commodities';
     if (/stock|equit|share/.test(t))   return 'stocks';
     if (/index|indic/.test(t))         return 'indices';
-    if (/crypto|coin/.test(t))         return 'crypto';
+    if (/curren|forex|\bfx\b/.test(t)) return 'currencies';
     // Fallbacks by symbol when the type is missing/unknown.
     if (s.startsWith('#'))                                         return 'stocks';
     if (/btc|eth|ltc|xrp|doge|sol|ada|bnb|dot|link|ton|trx/.test(s)) return 'crypto';
