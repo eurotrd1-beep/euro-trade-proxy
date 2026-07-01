@@ -362,6 +362,12 @@ class PoWsClient {
           // MUST match the user_agent baked into the session SSID — PO drops the
           // feed if the connection UA differs from the session's stored UA.
           'User-Agent': this._ua(),
+          // Session COOKIE on the WS handshake — the browser sends this and PO
+          // very likely checks it to AUTHORISE streaming (auth message alone only
+          // yields the public catalogue). Set PO_COOKIE from get-po-ssid.js.
+          ...(PO_COOKIE ? { Cookie: PO_COOKIE } : {}),
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
         },
       });
     } catch (e) { warn('ws create failed:', e.message); this._scheduleReconnect(); return; }

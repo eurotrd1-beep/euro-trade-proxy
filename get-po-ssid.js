@@ -32,10 +32,23 @@ const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
   const wsUrls = {};            // requestId → url
   const authFrames = [];        // {url, frame}
   const recvSamples = [];       // decoded sample received frames
+  const handshakes = [];        // {url, cookie, headers} of the WS upgrade requests
 
   cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
     wsUrls[requestId] = url;
     if (/po\.market|pocketoption|socket\.io/i.test(url)) console.log('[WS opened]', url);
+  });
+
+  // The browser sends the session COOKIE on the WS upgrade handshake — PO likely
+  // validates it to authorise streaming. Capture it so the server can replay it.
+  cdp.on('Network.webSocketWillSendHandshakeRequest', ({ requestId, request }) => {
+    const url = wsUrls[requestId] || '';
+    const h = (request && request.headers) || {};
+    const cookie = h.Cookie || h.cookie || '';
+    if (isPriceApi(url) && cookie && !handshakes.some(x => x.url === url)) {
+      handshakes.push({ url, cookie, headers: h });
+      console.log('\n[handshake cookie on ' + url + ']\n' + cookie + '\n');
+    }
   });
 
   cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
@@ -76,14 +89,17 @@ const isPriceApi = (u) => /api-[a-z0-9-]*\.po\.market/i.test(u || '');
   const wsUrl = (priceAuth && isPriceApi(priceAuth.url) ? priceAuth.url : null)
              || Object.values(wsUrls).find(isPriceApi)
              || '(not found — keep a chart open longer and retry)';
+  const hs = handshakes.find(h => h.url === wsUrl) || handshakes[0];
+  const cookie = hs ? hs.cookie : '';
 
   console.log('\n══════════════ COPY THESE TO RENDER → Environment ══════════════');
   console.log('PO_WS_URL =', wsUrl);
   console.log('PO_AUTH   =', priceAuth ? priceAuth.frame.replace(/^\d+/, '') : '(not found)');
+  console.log('PO_COOKIE =', cookie || '(none captured — keep chart open longer & retry)');
   console.log('════════════════════════════════════════════════════════════════\n');
 
   fs.writeFileSync('po-capture.json', JSON.stringify(
-    { capturedAt: new Date().toISOString(), wsUrl, authFrames, recvSamples, allWsUrls: wsUrls }, null, 2));
-  console.log('📄 Saved po-capture.json — send its contents back to verify the parser.\n');
+    { capturedAt: new Date().toISOString(), wsUrl, cookie, authFrames, handshakes, recvSamples, allWsUrls: wsUrls }, null, 2));
+  console.log('📄 Saved po-capture.json — send its contents back to verify.\n');
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });
