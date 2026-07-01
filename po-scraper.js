@@ -283,6 +283,7 @@ class PoWsClient {
     this._connectedAt = 0;    // when the socket opened (for session-length check)
     this._flaps = 0;          // consecutive short-lived sessions (flapping)
     this._triedRecapture = false;  // already tried a server-IP recapture this run?
+    this._framesRecv = 0;     // data frames received in the current session (diag)
     this._scanning = false;
     this._scanAssets = [];
     this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
@@ -366,6 +367,7 @@ class PoWsClient {
     ws.on('open', () => {
       this.connected = true;
       this._connectedAt = Date.now();
+      this._framesRecv = 0;
       log('ws open — handshaking');
       this._reportStatus({ connected: true, loggedIn: false, phase: 'relogin' });
     });
@@ -434,6 +436,7 @@ class PoWsClient {
       this._lastDataAt = Date.now();           // proof the session is alive
       this._health.lastHeartbeatOk = new Date().toISOString();
       this._staleChecks = 0;
+      this._framesRecv++;
       if (!this.authed) {
         this.authed = true; this.loginFails = 0; this._repairFails = 0;
         this._authedAt = Date.now();
@@ -478,8 +481,9 @@ class PoWsClient {
       phase = (this._flaps >= 4 || this.loginFails >= MAX_LOGIN_FAILS) ? 'login_failed' : 'reconnecting';
     }
 
-    warn(`ws closed (code=${code}, wasAuthed=${wasAuthed}, aliveMs=${Math.round(aliveMs/1000)}s, flaps=${this._flaps})`);
-    this._reportStatus({ connected: false, loggedIn: false, phase });
+    const diag = `close=${code} alive=${Math.round(aliveMs / 1000)}s frames=${this._framesRecv} flaps=${this._flaps} authed=${wasAuthed}`;
+    warn(`ws closed (${diag})`);
+    this._reportStatus({ connected: false, loggedIn: false, phase, diag });
 
     // Persistent flapping with a token that AUTHS but won't hold ⇒ the captured
     // token is bound to the capture IP / shared with the browser. The real fix is
@@ -763,12 +767,13 @@ class PoWsClient {
     const newPhase = patch.phase || this._phase;
     if (newPhase !== this._phase) this._phaseSince = new Date().toISOString();   // phase transition time (for client UX escalation)
     this._phase = newPhase;
+    if (patch.diag) this._diag = patch.diag;
     if (!db) return;
     try {
       await db.from('configs').update({
         data: {
           connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
-          phaseSince: this._phaseSince,
+          phaseSince: this._phaseSince, diag: this._diag || '',
           reconnects: this.reconnects, lastError: patch.lastError || '',
           // Session health log (helps understand real token lifetime over time).
           lastHeartbeatOk: this._health.lastHeartbeatOk,
