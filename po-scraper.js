@@ -490,15 +490,20 @@ class PoWsClient {
     warn(`ws closed (${diag})`);
     this._reportStatus({ connected: false, loggedIn: false, phase, diag });
 
-    // NOTE: the browser-based auto-recapture is intentionally NOT triggered here.
-    // On 512 MB it OOMs, and its fresh login creates a same-account session
-    // conflict that kicks THIS socket (1s closes). We rely on the local token +
-    // keep-alive instead. (recaptureToken remains available for manual/high-RAM use.)
+    // The token auths but never streams (priceFrames stays 0) ⇒ it's IP-bound to
+    // the capture machine. Try ONCE to capture a token from the SERVER's own IP
+    // (browser strike) — instrumented via repairDiag so we see if it works or OOMs.
+    if (this._flaps === 3 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
+      this._triedRecapture = true;
+      err('🟧 OTC: token auths but never streams (IP-bound). Trying a one-time SERVER-IP recapture…');
+      this._repair();
+      return;                         // repair owns reconnection; don't double-connect
+    }
     this._scheduleReconnect(delay);
   }
 
   _scheduleReconnect(delayMs) {
-    if (this._reconnectTimer) return;
+    if (this._reconnectTimer || this._repairing) return;   // don't reconnect mid-repair (avoids session conflict)
     const delay = delayMs || this._backoffMs();
     this.reconnects++;
     warn(`reconnect #${this.reconnects} in ${Math.round(delay / 1000)}s`);
@@ -574,6 +579,21 @@ class PoWsClient {
     }
   }
 
+  // Live recapture-stage reporter → otc_status.repairDiag (so progress/failure of
+  // the browser strike is visible in the DB without needing Render logs).
+  async _reportRepair(stage) {
+    this._repairDiag = stage;
+    log('recapture stage:', stage);
+    if (!db) return;
+    try {
+      const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
+      const cur = (data && data.data) || {};
+      await db.from('configs').update({
+        data: { ...cur, repairDiag: stage, repairStageAt: new Date().toISOString() },
+      }).eq('id', 'otc_status');
+    } catch (_) {}
+  }
+
   // Temporary, login-only browser "strike": open → log in → grab the new auth
   // frame via CDP → close immediately. Kept short + resource-blocked to minimise
   // RAM (it is NOT a persistent browser).
@@ -584,8 +604,9 @@ class PoWsClient {
       chromium = require('@sparticuz/chromium');
       puppeteer = require('puppeteer-core');
       try { chromium.setGraphicsMode = false; } catch (_) {}
-    } catch (e) { warn('recapture deps missing:', e.message); return false; }
+    } catch (e) { await this._reportRepair('deps-missing:' + e.message); return false; }
     try {
+      await this._reportRepair('launching-chromium');
       const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
       browser = await puppeteer.launch({
         headless: chromium.headless ?? true,
@@ -620,11 +641,14 @@ class PoWsClient {
         if (/"auth"/.test(d) && /"session"/.test(d) && isApi(u)) { authFrame = d; wsUrl = u; }
       });
 
+      await this._reportRepair('browser-launched');
       await page.goto(PO_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3500));
+      await this._reportRepair('login-page-loaded');
       await page.type('input[type="email"], input[name="email"], #email', PO_EMAIL, { delay: 25 }).catch(() => {});
       await page.type('input[type="password"], input[name="password"], #password', PO_PASSWORD, { delay: 25 }).catch(() => {});
       await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button'); if (b) b.click(); }).catch(() => {});
+      await this._reportRepair('login-submitted');
 
       const start = Date.now();
       while (Date.now() - start < 45_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
@@ -635,11 +659,14 @@ class PoWsClient {
         activeAuth = authFrame.replace(/^4\d+(-)?/, '');   // store ["auth",{...}]
         if (wsUrl) activeWsUrl = wsUrl;
         await saveToken(activeAuth, activeWsUrl);
+        await this._reportRepair('auth-captured-ok');
         log('recaptured a fresh token ✅');
         return true;
       }
+      await this._reportRepair('no-auth-after-45s (login failed / captcha?)');
       return false;
     } catch (e) {
+      await this._reportRepair('error:' + (e.message || '').slice(0, 80));
       warn('recapture error:', e.message);
       return false;
     } finally {
