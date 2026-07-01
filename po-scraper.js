@@ -338,6 +338,14 @@ class PoWsClient {
     this._connect();
   }
 
+  // The exact User-Agent stored inside the session SSID (PO validates it against
+  // the connection's UA). Extracted from the active token; safe default otherwise.
+  _ua() {
+    const m = /(Mozilla\/[^"\\]{20,}?Safari\/[0-9.]+)/.exec(activeAuth || '');
+    return (m && m[1]) ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
+  }
+
   _connect() {
     this._clearWs();
     this.authed = false;
@@ -347,8 +355,9 @@ class PoWsClient {
       ws = new WebSocketLib(activeWsUrl, {
         headers: {
           Origin: 'https://pocketoption.com',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-                        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          // MUST match the user_agent baked into the session SSID — PO drops the
+          // feed if the connection UA differs from the session's stored UA.
+          'User-Agent': this._ua(),
         },
       });
     } catch (e) { warn('ws create failed:', e.message); this._scheduleReconnect(); return; }
