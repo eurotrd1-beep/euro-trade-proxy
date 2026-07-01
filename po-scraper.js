@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'poopen-1';
+const BUILD = 'poopen-2';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -1280,7 +1280,14 @@ class PoWsClient {
   tickAll() {
     for (const sym of this.enabled) {
       const p = this.prices[sym];
-      if (p != null) this.store.tick(sym, p);
+      if (p == null) continue;
+      // FREEZE candles for assets PO marks closed (po=false): PO stops its chart
+      // there even though it keeps streaming the price, so building candles from
+      // that stream would diverge. Skipping means that on reopen we resume from
+      // the exact point PO does — no phantom/closed-period candles.
+      const ps = this._poStatus[sym];
+      if (ps && ps.open === false) continue;
+      this.store.tick(sym, p);
     }
     this._flushPrices();
   }
