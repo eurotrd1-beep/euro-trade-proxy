@@ -596,11 +596,11 @@ class PoWsClient {
     this._reportStatus({ connected: false, loggedIn: false, phase: 'repairing' });
     log('self-repair: minting a server-IP token…');
     try {
-      // Free path first: raw HTTP login (no browser). Browser strike only as a
-      // fallback (it OOMs on 512 MB, so it usually won't help there).
-      let ok = await this.httpLogin();
-      if (!ok) ok = await this.recaptureToken();
-      if (!ok) throw new Error('recapture produced no token');
+      // Free path: raw HTTP login (no browser). Browser fallback is disabled for
+      // now — a fresh headless login hits reCAPTCHA anyway, and it muddies the
+      // repairDiag. Re-enable later if needed.
+      const ok = await this.httpLogin();
+      if (!ok) throw new Error('httpLogin produced no token');
       this._repairFails = 0; this._repairOpenUntil = 0;
       this._health.repairs++; this._health.lastRepairAt = new Date().toISOString();
       log('self-repair OK ✅ — reconnecting with fresh token');
@@ -640,9 +640,14 @@ class PoWsClient {
     };
     try {
       await this._reportRepair('http:GET-login-page');
-      const g = await httpReq('GET', PO_LOGIN_URL, { headers: baseHeaders });
+      // Seed the captcha-skip flag PO uses for trusted devices (value is just "1")
+      // so a fresh server login isn't forced through reCAPTCHA. Override via PO_LOGIN_COOKIE.
+      const jar = {};
+      const seed = process.env.PO_LOGIN_COOKIE || 'no-login-captcha=1; lang=en';
+      for (const p of seed.split(';')) { const m = /^\s*([^=]+)=([^;]*)/.exec(p); if (m) jar[m[1].trim()] = m[2].trim(); }
+      const g = await httpReq('GET', PO_LOGIN_URL, { headers: { ...baseHeaders, Cookie: cookieHeader(jar) } });
       if (g.error) { await this._reportRepair('http:GET-error:' + g.error); return false; }
-      const jar = mergeCookies({}, g.setCookie);
+      mergeCookies(jar, g.setCookie);
       const html = g.body || '';
       // Cloudflare challenge?
       if (g.status === 403 || g.status === 503 || /cf-browser-verification|challenge-platform|Just a moment/i.test(html)) {
@@ -906,7 +911,7 @@ class PoWsClient {
       await db.from('configs').update({
         data: {
           connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
-          phaseSince: this._phaseSince, diag: this._diag || '',
+          phaseSince: this._phaseSince, diag: this._diag || '', repairDiag: this._repairDiag || '',
           reconnects: this.reconnects, lastError: patch.lastError || '',
           // Session health log (helps understand real token lifetime over time).
           lastHeartbeatOk: this._health.lastHeartbeatOk,
