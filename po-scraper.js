@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = '2captcha-2';
+const BUILD = '2captcha-3';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -769,7 +769,15 @@ class PoWsClient {
         await this._reportRepair('http:LOGIN-OK ✅ server-IP token minted');
         return true;
       }
-      await this._reportRepair(`http:no-ci_session (POST status ${p.status}) — login rejected`);
+      // Rejected despite a solved captcha — surface PO's ACTUAL reason: the
+      // cookies it set + a text snippet of the response body (error message /
+      // re-rendered form). This tells us if it's captcha-score, credentials,
+      // an extra field, or a redirect.
+      const cookieNames = Object.keys(jar).join(',');
+      const bodyText = (p.body || '').replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      await this._reportRepair(
+        `http:no-ci (status ${p.status}) loc=${p.location || '-'} cookies=[${cookieNames}] body="${bodyText}"`);
       return false;
     } catch (e) {
       await this._reportRepair('http:error:' + (e.message || '').slice(0, 80));
