@@ -374,7 +374,7 @@ class TVClient {
     const sds = data && data['sds_1'];
     if (!sds || !sds.s) return;
 
-    const MAX = 150;
+    const MAX = 50;
 
     if (full) {
       const all     = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
@@ -452,7 +452,7 @@ class TVClient {
     // (Frozen price across the boundary ⇒ hold, no flat candle.)
     if (price !== last.c) {
       arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-      if (arr.length > 150) arr.shift();   // keep last 150, drop oldest
+      if (arr.length > MAX) arr.shift();   // keep last MAX, drop oldest
       this._schedSave(key);                // persist the just-closed candle
     }
   }
@@ -469,7 +469,7 @@ class TVClient {
     const tvIv = ivToTV(iv);
     this._send({ m: 'chart_create_session', p: [cs, ''] });
     this._send({ m: 'resolve_symbol',       p: [cs, 'sds_sym_1', `={"symbol":"${tvSym}","adjustment":"splits"}`] });
-    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 150] });
+    this._send({ m: 'create_series',        p: [cs, 'sds_1', 's1', 'sds_sym_1', tvIv, 50] });
   }
 
   subscribe(tvSym, iv) {

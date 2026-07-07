@@ -166,7 +166,7 @@ async function fetchCaptchaBalance() {
 }
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
-const MAX_CANDLES = 150;
+const MAX_CANDLES = 50;
 const PRICE_MS    = 700;    // price flush cadence (sub-second freshness)
 const MAX_LOGIN_FAILS = 3;
 
