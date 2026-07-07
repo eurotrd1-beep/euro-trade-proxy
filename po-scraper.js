@@ -1311,6 +1311,9 @@ class PoWsClient {
       const ps = this._poStatus[sym];
       if (ps && ps.open === false) continue;
       this.store.tick(sym, p);
+      if (typeof global.broadcastOtcPrice === 'function') {
+        global.broadcastOtcPrice(sym, p);
+      }
     }
     this._flushPrices();
   }
@@ -1339,6 +1342,7 @@ class PoWsClient {
     }
     if (!any) return;
     this._lastPricesWrite = now;
+    global.otcPrices = snapshot;
     db.from('configs').update({ data: snapshot }).eq('id', 'otc_prices')
       .then(({ error }) => { if (error) err('otc_prices write:', error.message); })
       .catch(e => err('otc_prices write:', e.message));
@@ -1360,19 +1364,20 @@ class PoWsClient {
       // Merge with the current row so we DON'T wipe fields other writers own
       // (cfg from boot, repairTrail/repairStageAt from _reportRepair).
       const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
-      const cur = (data && data.data) || {};
+      const statusData = {
+        ...cur,
+        connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
+        phaseSince: this._phaseSince, diag: this._diag || '', repairDiag: this._repairDiag || '',
+        reconnects: this.reconnects, lastError: patch.lastError || '',
+        // Session health log (helps understand real token lifetime over time).
+        lastHeartbeatOk: this._health.lastHeartbeatOk,
+        repairs: this._health.repairs,
+        lastRepairAt: this._health.lastRepairAt,
+        updatedAt: new Date().toISOString(),
+      };
+      global.otcStatus = statusData;
       await db.from('configs').update({
-        data: {
-          ...cur,
-          connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
-          phaseSince: this._phaseSince, diag: this._diag || '', repairDiag: this._repairDiag || '',
-          reconnects: this.reconnects, lastError: patch.lastError || '',
-          // Session health log (helps understand real token lifetime over time).
-          lastHeartbeatOk: this._health.lastHeartbeatOk,
-          repairs: this._health.repairs,
-          lastRepairAt: this._health.lastRepairAt,
-          updatedAt: new Date().toISOString(),
-        },
+        data: statusData,
       }).eq('id', 'otc_status');
     } catch (_) {}
   }
@@ -1486,13 +1491,17 @@ async function start() {
     try {
       const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
       const cur = (data && data.data) || {};
-      await db.from('configs').update({ data: { ...cur,
+      const statusData = {
+        ...cur,
         cfg: `build=${BUILD} email=${!!PO_EMAIL} pass=${!!PO_PASSWORD} captcha=${!!CAPTCHA_API_KEY} authLen=${(activeAuth || '').length} ws=${(activeWsUrl || '').replace(/\?.*/, '')}`,
-      } }).eq('id', 'otc_status');
+      };
+      global.otcStatus = statusData;
+      await db.from('configs').update({ data: statusData }).eq('id', 'otc_status');
     } catch (_) {}
   }
 
   const client = new PoWsClient(PoProtocol);
+  global.otcClient = client;
 
   // Know which symbols to subscribe BEFORE connecting.
   const enabled = await loadEnabledSymbols();

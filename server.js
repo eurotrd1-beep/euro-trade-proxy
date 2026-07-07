@@ -5,6 +5,7 @@ const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const { WebSocket, WebSocketServer } = require('ws');
+const zlib = require('zlib');
 
 // ── Supabase (pairs listener) ─────────────────────────────────────────────────
 let db = null;
@@ -81,6 +82,20 @@ function broadcastPrice(tvSym, price) {
     }
   }
 }
+
+global.broadcastOtcPrice = function(otcSym, price) {
+  const bare = bareSymbol(otcSym);
+  for (const [ws, subs] of clientMap) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    let match = subs.has(otcSym);
+    if (!match) {
+      for (const s of subs) { if (bareSymbol(s) === bare) { match = true; break; } }
+    }
+    if (match) {
+      try { ws.send(JSON.stringify({ sym: otcSym, price })); } catch (_) {}
+    }
+  }
+};
 
 // ── Candle persistence ────────────────────────────────────────────────────────
 
@@ -584,9 +599,88 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const json = (obj, code = 200) => {
-    res.writeHead(code, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(obj));
+    const bodyStr = JSON.stringify(obj);
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    if (acceptEncoding.includes('gzip')) {
+      zlib.gzip(bodyStr, (err, compressed) => {
+        if (!err) {
+          res.writeHead(code, {
+            'Content-Type': 'application/json',
+            'Content-Encoding': 'gzip',
+            'Content-Length': compressed.length
+          });
+          res.end(compressed);
+        } else {
+          res.writeHead(code, {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(bodyStr)
+          });
+          res.end(bodyStr);
+        }
+      });
+    } else {
+      res.writeHead(code, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(bodyStr)
+      });
+      res.end(bodyStr);
+    }
   };
+
+  // ── GET /api/otc/candles?symbol=AEDCNY_otc&interval=1m ───────────────────
+  if (url.pathname === '/api/otc/candles') {
+    const rawSymbol = url.searchParams.get('symbol') || '';
+    const interval  = url.searchParams.get('interval') || '1m';
+    if (!rawSymbol) { json({ error: 'symbol required' }, 400); return; }
+
+    const key = `${rawSymbol}_${interval}`;
+    let candles = [];
+
+    if (global.otcClient && global.otcClient.store && global.otcClient.store.candles[key]) {
+      candles = global.otcClient.store.candles[key];
+    } else if (db) {
+      try {
+        const { data, error } = await db.from('candles').select('data').eq('key', key).single();
+        if (!error && data && Array.isArray(data.data)) {
+          candles = data.data;
+          if (global.otcClient && global.otcClient.store) {
+            global.otcClient.store.candles[key] = candles;
+          }
+        }
+      } catch (_) {}
+    }
+
+    json({
+      status: candles.length ? 'ok' : 'loading',
+      candles: candles.slice(-50), // Cap at 50 to minimize Egress
+    });
+    return;
+  }
+
+  // ── GET /api/otc/status ───────────────────────────────────────────────────
+  if (url.pathname === '/api/otc/status') {
+    let prices = global.otcPrices;
+    let status = global.otcStatus;
+
+    if (!prices && db) {
+      try {
+        const { data } = await db.from('configs').select('data').eq('id', 'otc_prices').single();
+        prices = data && data.data;
+      } catch (_) {}
+    }
+    if (!status && db) {
+      try {
+        const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
+        status = data && data.data;
+      } catch (_) {}
+    }
+
+    json([
+      { id: 'otc_status', data: status || {} },
+      { id: 'otc_prices', data: prices || {} }
+    ]);
+    return;
+  }
 
   // ── GET /api/tv/candles?symbol=EURUSD&interval=1m ────────────────────────
   if (url.pathname === '/api/tv/candles') {
