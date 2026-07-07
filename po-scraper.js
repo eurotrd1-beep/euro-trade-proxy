@@ -328,6 +328,23 @@ const PoProtocol = {
 // ════════════════════════════════════════════════════════════════════════════
 //  Candle store — builds + persists candles (platform-agnostic)
 // ════════════════════════════════════════════════════════════════════════════
+// Drop invalid / FUTURE-stamped candles, dedup by time, sort, cap to MAX_CANDLES.
+// PO chart-history sometimes returns future-offset timestamps; seedHistory then
+// kept the "newest" (future) 50 and evicted the real history, so the app showed
+// only a handful of real candles. Rejecting future candles at every entry point
+// (hydrate/seed/tick) keeps the stored series real and full.
+function sanitizeCandles(arr) {
+  if (!Array.isArray(arr)) return [];
+  const cut = Math.floor(Date.now() / 1000) + 120;   // small margin for the forming candle
+  const byT = new Map();
+  for (const c of arr) {
+    if (!c || typeof c.t !== 'number' || c.t > cut) continue;
+    if (![c.o, c.h, c.l, c.c].every(v => typeof v === 'number' && isFinite(v))) continue;
+    byT.set(c.t, c);   // dedup by timestamp (last wins)
+  }
+  return [...byT.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
+}
+
 class CandleStore {
   constructor() {
     this.candles = {};       // `${symbol}_${iv}` → Candle[]
@@ -345,7 +362,15 @@ class CandleStore {
       if (error) { err('hydrate error:', error.message); return; }
       let n = 0;
       for (const row of (data || [])) {
-        if (row.key && Array.isArray(row.data) && row.data.length) { this.candles[row.key] = row.data; n++; }
+        if (row.key && Array.isArray(row.data) && row.data.length) {
+          const clean = sanitizeCandles(row.data);
+          if (!clean.length) continue;
+          this.candles[row.key] = clean;
+          // If hydration dropped corrupt/future candles, persist the cleaned
+          // series back so the bad data is purged from Supabase too.
+          if (clean.length !== row.data.length) this._schedSave(row.key);
+          n++;
+        }
       }
       if (n) log(`hydrated ${n} OTC candle series`);
     } catch (e) { err('hydrate failed:', e.message); }
@@ -382,7 +407,7 @@ class CandleStore {
         if (!c) map.set(cTime, { t: cTime, o: price, h: price, l: price, c: price });
         else { if (price > c.h) c.h = price; if (price < c.l) c.l = price; c.c = price; }
       }
-      const merged = [...map.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
+      const merged = sanitizeCandles([...map.values()]);
       this.candles[key] = merged;
       if (merged.length !== before) { this._schedSave(key); changed++; }
     }
@@ -405,6 +430,9 @@ class CandleStore {
     const ivSec = ivToSeconds(iv);
     const now = Math.floor(Date.now() / 1000);
     const cTime = Math.floor(now / ivSec) * ivSec;
+    // Defensive: if a future-stamped candle ever slipped in, drop trailing future
+    // candles so the live frame stays current (mirrors the client self-heal).
+    while (arr.length && arr[arr.length - 1].t > cTime) arr.pop();
     const last = arr.length ? arr[arr.length - 1] : null;
     if (!last) { arr.push({ t: cTime, o: price, h: price, l: price, c: price }); this._schedSave(key); return; }
     if (cTime === last.t) {
