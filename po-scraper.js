@@ -389,6 +389,21 @@ class CandleStore {
   // it never clobbers a healthy live series.
   seedHistory(symbol, ticks) {
     if (!Array.isArray(ticks) || !ticks.length) return 0;
+
+    // PO chart-history sometimes returns timestamps shifted into the FUTURE.
+    // Rather than discard them (which would leave the app to rebuild ~50 candles
+    // live over ~an hour), ANCHOR the batch: if its newest tick is in the future,
+    // shift every tick back by the same amount so the newest lands on "now" —
+    // recovering the real OHLC shape aligned to the current time.
+    const nowSec = Math.floor(Date.now() / 1000);
+    let maxSec = 0;
+    for (const t of ticks) {
+      let s = Number(t[0]); if (!isFinite(s)) continue;
+      s = s > 1e12 ? Math.floor(s / 1000) : Math.floor(s);
+      if (s > maxSec) maxSec = s;
+    }
+    const shift = (maxSec > nowSec + 120) ? (maxSec - nowSec) : 0;
+
     let changed = 0;
     for (const iv of IVS) {
       const ivSec = ivToSeconds(iv);
@@ -401,7 +416,7 @@ class CandleStore {
       for (const t of ticks) {
         const ts = Number(t[0]); const price = Number(t[1]);
         if (!isFinite(ts) || !isFinite(price) || price <= 0) continue;
-        const sec = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);   // ms→s
+        const sec = (ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts)) - shift;   // ms→s, de-future
         const cTime = Math.floor(sec / ivSec) * ivSec;
         const c = map.get(cTime);
         if (!c) map.set(cTime, { t: cTime, o: price, h: price, l: price, c: price });
