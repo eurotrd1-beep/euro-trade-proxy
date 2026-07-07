@@ -167,7 +167,8 @@ async function fetchCaptchaBalance() {
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
 const MAX_CANDLES = 50;
-const PRICE_MS    = 700;    // price flush cadence (sub-second freshness)
+const PRICE_MS    = 700;    // in-memory price snapshot cadence (sub-second freshness)
+const PRICE_DB_MS = 20000;  // Supabase persist cadence — cold-start fallback only (see _flushPrices)
 const MAX_LOGIN_FAILS = 3;
 
 const log  = (...a) => console.log('[OTC]', ...a);
@@ -467,6 +468,7 @@ class PoWsClient {
     this._scanAssets = [];
     this._assetMap = new Map();   // symbol → {symbol,name} catalogue (from updateAssets)
     this._lastPricesWrite = 0;
+    this._lastPricesDbWrite = 0;
     this._unknownSamples = 0;
     this._phase = 'boot';
     this._hbTimer = null;     // websocket heartbeat (randomised)
@@ -1319,7 +1321,6 @@ class PoWsClient {
   }
 
   _flushPrices() {
-    if (!db) return;
     const now = Date.now();
     if (now - this._lastPricesWrite < PRICE_MS) return;
     const snapshot = {}; let any = false;
@@ -1342,7 +1343,16 @@ class PoWsClient {
     }
     if (!any) return;
     this._lastPricesWrite = now;
-    global.otcPrices = snapshot;
+    global.otcPrices = snapshot;   // in-memory: the live source the proxy API serves (~700ms)
+
+    // Persist to Supabase only every PRICE_DB_MS. The app reads prices from the
+    // in-memory snapshot above (via the proxy /api/otc/status), so the DB copy is
+    // ONLY a cold-start fallback. Updating this single hot configs/otc_prices row
+    // every 700ms (× multiple proxy instances) caused Postgres row-lock
+    // contention → statement timeouts → the whole DB choking (Cloudflare 522).
+    if (!db) return;
+    if (now - this._lastPricesDbWrite < PRICE_DB_MS) return;
+    this._lastPricesDbWrite = now;
     db.from('configs').update({ data: snapshot }).eq('id', 'otc_prices')
       .then(({ error }) => { if (error) err('otc_prices write:', error.message); })
       .catch(e => err('otc_prices write:', e.message));
