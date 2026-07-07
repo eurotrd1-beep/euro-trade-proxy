@@ -366,9 +366,10 @@ class CandleStore {
           const clean = sanitizeCandles(row.data);
           if (!clean.length) continue;
           this.candles[row.key] = clean;
-          // If hydration dropped corrupt/future candles, persist the cleaned
-          // series back so the bad data is purged from Supabase too.
-          if (clean.length !== row.data.length) this._schedSave(row.key);
+          // NOTE: don't re-save here. Mass-writing every cleaned key on boot
+          // (150 keys × 2 instances) bursts the DB and choked it. hydrate/seed/
+          // tick all filter future candles on the fly, so in-memory is always
+          // clean; each key's next natural _save purges its Supabase row anyway.
           n++;
         }
       }
