@@ -342,7 +342,28 @@ function sanitizeCandles(arr) {
     if (![c.o, c.h, c.l, c.c].every(v => typeof v === 'number' && isFinite(v))) continue;
     byT.set(c.t, c);   // dedup by timestamp (last wins)
   }
-  return [...byT.values()].sort((a, b) => a.t - b.t).slice(-MAX_CANDLES);
+  let out = [...byT.values()].sort((a, b) => a.t - b.t);
+  // Keep only the most recent CONTIGUOUS run: if the scraper was down / restarted
+  // there's a large time gap between the old and new candles, which renders as two
+  // clusters with a void between them. Cut at the last gap wider than 3× the base
+  // interval (smallest gap) so the stored/served series is one clean run.
+  if (out.length > 2) {
+    let minGap = Infinity;
+    for (let i = 1; i < out.length; i++) {
+      const g = out[i].t - out[i - 1].t;
+      if (g > 0 && g < minGap) minGap = g;
+    }
+    if (isFinite(minGap) && minGap > 0) {
+      let cutIdx = 0;
+      for (let i = 1; i < out.length; i++) {
+        const gg = out[i].t - out[i - 1].t;
+        // Only a real downtime gap: >10× interval AND >30 min absolute.
+        if (gg > minGap * 10 && gg > 1800) cutIdx = i;
+      }
+      if (cutIdx > 0) out = out.slice(cutIdx);
+    }
+  }
+  return out.slice(-MAX_CANDLES);
 }
 
 class CandleStore {
