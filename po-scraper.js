@@ -166,7 +166,7 @@ async function fetchCaptchaBalance() {
 }
 
 const IVS         = ['1m', '5m', '15m', '1h', '1D'];
-const MAX_CANDLES = 50;
+const MAX_CANDLES = 100;
 const PRICE_MS    = 700;    // in-memory price snapshot cadence (sub-second freshness)
 const PRICE_DB_MS = 20000;  // Supabase persist cadence — cold-start fallback only (see _flushPrices)
 const MAX_LOGIN_FAILS = 3;

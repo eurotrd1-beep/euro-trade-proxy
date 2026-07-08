@@ -108,6 +108,7 @@ function keyToFile(key) {
 
 const PORT   = process.env.PORT || 3000;
 const TV_URL = 'wss://data.tradingview.com/socket.io/websocket?from=chart%2F&date=2024_01_01-00_01&type=chart';
+const MAX_CANDLES = 100;   // candles kept per series (store + served) — was 50
 
 // ── Interval helpers ──────────────────────────────────────────────────────────
 
@@ -389,7 +390,7 @@ class TVClient {
     const sds = data && data['sds_1'];
     if (!sds || !sds.s) return;
 
-    const MAX = 50;
+    const MAX = MAX_CANDLES;
 
     if (full) {
       const all     = sds.s.map(b => ({ t: b.v[0], o: b.v[1], h: b.v[2], l: b.v[3], c: b.v[4] }));
@@ -467,8 +468,8 @@ class TVClient {
     // (Frozen price across the boundary ⇒ hold, no flat candle.)
     if (price !== last.c) {
       arr.push({ t: cTime, o: price, h: price, l: price, c: price });
-      if (arr.length > MAX) arr.shift();   // keep last MAX, drop oldest
-      this._schedSave(key);                // persist the just-closed candle
+      if (arr.length > MAX_CANDLES) arr.shift();   // keep last MAX_CANDLES, drop oldest
+      this._schedSave(key);                        // persist the just-closed candle
     }
   }
 
@@ -652,7 +653,7 @@ const server = http.createServer(async (req, res) => {
 
     json({
       status: candles.length ? 'ok' : 'loading',
-      candles: candles.slice(-50), // Cap at 50 to minimize Egress
+      candles: candles.slice(-MAX_CANDLES), // last 100 (was 50)
     });
     return;
   }
