@@ -692,19 +692,6 @@ class PoWsClient {
     }
     // PO chart history → seed the candle series immediately (full chart at once).
     if (res.history && res.history.ticks && res.history.ticks.length) {
-      // TEMP DEBUG: capture the raw PO history timestamps vs our clock so we can
-      // see whether PO returns future-offset times (breaking the backfill).
-      try {
-        const tk = res.history.ticks;
-        const secs = tk.map(t => { let s = Number(t[0]); return s > 1e12 ? Math.floor(s/1000) : Math.floor(s); }).filter(isFinite);
-        const nowS = Math.floor(Date.now()/1000);
-        global.otcHistoryDebug = {
-          symbol: res.history.symbol, count: tk.length, period: res.history.period,
-          rawFirst: tk[0] && tk[0][0], rawLast: tk[tk.length-1] && tk[tk.length-1][0],
-          minSec: Math.min.apply(null, secs), maxSec: Math.max.apply(null, secs),
-          now: nowS, maxMinusNow: Math.max.apply(null, secs) - nowS, at: new Date().toISOString()
-        };
-      } catch (_) {}
       const n = this.store.seedHistory(res.history.symbol, res.history.ticks);
       this._histLogged = this._histLogged || 0;
       if (this._histLogged < 10) {
