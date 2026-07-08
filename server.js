@@ -683,6 +683,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── TEMP: GET /api/debug/history — last raw PO history batch timestamps ──────
+  if (url.pathname === '/api/debug/history') {
+    json(global.otcHistoryDebug || { note: 'no history batch captured yet' });
+    return;
+  }
+
   // ── GET /api/tv/candles?symbol=EURUSD&interval=1m ────────────────────────
   if (url.pathname === '/api/tv/candles') {
     const raw   = url.searchParams.get('symbol')   || 'EURUSD';
