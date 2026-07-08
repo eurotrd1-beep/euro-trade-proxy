@@ -1300,6 +1300,13 @@ class PoWsClient {
   // once full or PO returns nothing new twice. 1D is skipped (100 days impractical).
   _startBackfill() {
     this._stopBackfill();
+    // DISABLED: verified that Pocket Option's WebSocket only serves ~recent data
+    // (~21 min, stamped ~2h in the future) and does NOT return older windows for
+    // any period/time/offset. Paging just wastes requests on the precious 24/7
+    // socket. Full charts on higher timeframes are built by live accumulation +
+    // Supabase persistence instead. Re-enable only if PO starts serving history.
+    return;
+    /* eslint-disable no-unreachable */
     this._backfillTries = this._backfillTries || {};
     this._histIndex = this._histIndex || 1000000;
     const TFS = [['1m', 60], ['5m', 300], ['15m', 900], ['1h', 3600]];
