@@ -493,6 +493,7 @@ class PoWsClient {
     this._authedAt = 0;       // when the current session authed (for flap detection)
     this._connectedAt = 0;    // when the socket opened (for session-length check)
     this._flaps = 0;          // consecutive short-lived sessions (flapping)
+    this._poOffset = null;    // PO stamps history ~N sec in the FUTURE; detected once
     this._triedRecapture = false;  // already tried a server-IP recapture this run?
     this._framesRecv = 0;
     this._priceFrames = 0;    // price ticks (updateStream/history), not the catalogue
@@ -692,7 +693,29 @@ class PoWsClient {
     }
     // PO chart history → seed the candle series immediately (full chart at once).
     if (res.history && res.history.ticks && res.history.ticks.length) {
-      const n = this.store.seedHistory(res.history.symbol, res.history.ticks);
+      // PO stamps chart-history timestamps a CONSTANT amount into the future
+      // (~2h observed). Detect that offset ONCE from the first (recent) batch —
+      // where the newest tick ≈ now — then subtract it from every incoming batch
+      // so stored candles carry REAL time. Also used to offset backfill requests.
+      if (this._poOffset == null) {
+        const nowS = Math.floor(Date.now() / 1000);
+        let maxS = 0;
+        for (const t of res.history.ticks) {
+          let s = Number(t[0]); if (!isFinite(s)) continue;
+          s = s > 1e12 ? Math.floor(s / 1000) : Math.floor(s);
+          if (s > maxS) maxS = s;
+        }
+        this._poOffset = (maxS > nowS + 120) ? (maxS - nowS) : 0;
+        if (this._poOffset) log('PO history time offset detected:', this._poOffset, 's');
+      }
+      const off = this._poOffset || 0;
+      const ticks = off
+        ? res.history.ticks.map(t => {
+            const v = Number(t[0]);
+            return [v > 1e12 ? v - off * 1000 : v - off, t[1]];
+          })
+        : res.history.ticks;
+      const n = this.store.seedHistory(res.history.symbol, ticks);
       this._histLogged = this._histLogged || 0;
       if (this._histLogged < 10) {
         this._histLogged++;
@@ -1273,7 +1296,10 @@ class PoWsClient {
         if ((this._backfillTries[stateKey] || 0) >= 2) continue;  // no new data at this depth
         this._backfillTries[stateKey] = (this._backfillTries[stateKey] || 0) + 1;
         this._histIndex++;
-        const oldest = this.store.oldest1m(sym);
+        // Ask for the window BEFORE our oldest candle. Convert our REAL oldest
+        // time back into PO's future-offset space (+_poOffset) so PO returns the
+        // correct older window instead of ignoring it and re-sending recent data.
+        const oldest = this.store.oldest1m(sym) + (this._poOffset || 0);
         this._send('42["loadHistoryPeriod",{"asset":"' + sym +
           '","period":60,"time":' + oldest + ',"index":' + this._histIndex + ',"offset":9000}]');
         return;   // exactly one request per tick
