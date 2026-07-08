@@ -391,11 +391,17 @@ class CandleStore {
   // full chart immediately instead of building 3-4 candles from live ticks.
   // Only adopts a timeframe when it yields MORE candles than we already have, so
   // it never clobbers a healthy live series.
-  seedHistory(symbol, ticks) {
+  // periodSec = the PO period this history batch was requested at (60/300/900/…).
+  // A batch of resolution P can build its own timeframe AND any COARSER one, but
+  // not a finer one (a 5m batch can't reconstruct 1m). So only aggregate into
+  // timeframes whose seconds >= periodSec. (Unknown period ⇒ treat as 1m = all.)
+  seedHistory(symbol, ticks, periodSec) {
     if (!Array.isArray(ticks) || !ticks.length) return 0;
+    const minIvSec = periodSec && periodSec > 0 ? periodSec : 0;
     let changed = 0;
     for (const iv of IVS) {
       const ivSec = ivToSeconds(iv);
+      if (ivSec < minIvSec) continue;   // batch too coarse for this timeframe
       const key = `${symbol}_${iv}`;
       const before = (this.candles[key] || []).length;
       // Start from what we already have, then MERGE the history ticks in (so an
@@ -425,6 +431,15 @@ class CandleStore {
   }
   count1m(symbol) {
     const arr = this.candles[`${symbol}_1m`];
+    return arr ? arr.length : 0;
+  }
+  // Oldest stored candle time + count for ANY timeframe (per-period backfill).
+  oldestTf(symbol, iv) {
+    const arr = this.candles[`${symbol}_${iv}`];
+    return (arr && arr.length) ? arr[0].t : 0;
+  }
+  countTf(symbol, iv) {
+    const arr = this.candles[`${symbol}_${iv}`];
     return arr ? arr.length : 0;
   }
 
@@ -715,7 +730,7 @@ class PoWsClient {
             return [v > 1e12 ? v - off * 1000 : v - off, t[1]];
           })
         : res.history.ticks;
-      const n = this.store.seedHistory(res.history.symbol, ticks);
+      const n = this.store.seedHistory(res.history.symbol, ticks, Number(res.history.period) || 60);
       this._histLogged = this._histLogged || 0;
       if (this._histLogged < 10) {
         this._histLogged++;
@@ -1277,32 +1292,35 @@ class PoWsClient {
   _stopHeartbeat() { if (this._hbTimer) { clearTimeout(this._hbTimer); this._hbTimer = null; } }
 
   // ── History backfill ───────────────────────────────────────────────────────
-  // PO's changeSymbol only returns ~40 candles. To reach a full 150-candle chart
-  // like the platform, ask PO for the window BEFORE our oldest candle — ONE
-  // request every 2.5s (never a burst) so the precious 24/7 socket stays safe.
-  // Responses arrive as normal history frames → CandleStore.seedHistory merges
-  // them. Self-stops per pair once it hits 150 (or PO returns nothing new twice).
+  // Fill EACH timeframe to a full MAX_CANDLES chart by asking PO for the window
+  // BEFORE our oldest candle — at that timeframe's OWN period (1m→60, 5m→300, …),
+  // so higher timeframes reach 100 without needing hours of 1m data. ONE request
+  // every 2.5s (never a burst) so the precious 24/7 socket stays safe. Responses
+  // arrive as history frames → seedHistory merges them. Self-stops per (pair,tf)
+  // once full or PO returns nothing new twice. 1D is skipped (100 days impractical).
   _startBackfill() {
     this._stopBackfill();
     this._backfillTries = this._backfillTries || {};
     this._histIndex = this._histIndex || 1000000;
+    const TFS = [['1m', 60], ['5m', 300], ['15m', 900], ['1h', 3600]];
     this._backfillTimer = setInterval(() => {
       if (!this.authed || this._repairing) return;
       if (!this.ws || this.ws.readyState !== WebSocketLib.OPEN) return;
       for (const sym of this.enabled) {
-        const n = this.store.count1m(sym);
-        if (n === 0 || n >= MAX_CANDLES) continue;      // empty (no seed yet) or already full
-        const stateKey = sym + ':' + n;
-        if ((this._backfillTries[stateKey] || 0) >= 2) continue;  // no new data at this depth
-        this._backfillTries[stateKey] = (this._backfillTries[stateKey] || 0) + 1;
-        this._histIndex++;
-        // Ask for the window BEFORE our oldest candle. Convert our REAL oldest
-        // time back into PO's future-offset space (+_poOffset) so PO returns the
-        // correct older window instead of ignoring it and re-sending recent data.
-        const oldest = this.store.oldest1m(sym) + (this._poOffset || 0);
-        this._send('42["loadHistoryPeriod",{"asset":"' + sym +
-          '","period":60,"time":' + oldest + ',"index":' + this._histIndex + ',"offset":9000}]');
-        return;   // exactly one request per tick
+        for (const [iv, period] of TFS) {
+          const n = this.store.countTf(sym, iv);
+          if (n === 0 || n >= MAX_CANDLES) continue;   // no seed yet, or already full
+          const stateKey = sym + ':' + iv + ':' + n;
+          if ((this._backfillTries[stateKey] || 0) >= 2) continue;  // no new data at this depth
+          this._backfillTries[stateKey] = (this._backfillTries[stateKey] || 0) + 1;
+          this._histIndex++;
+          // Window BEFORE our oldest candle for this TF, converted back into PO's
+          // future-offset space (+_poOffset) so PO returns the correct OLDER window.
+          const time = this.store.oldestTf(sym, iv) + (this._poOffset || 0);
+          this._send('42["loadHistoryPeriod",{"asset":"' + sym +
+            '","period":' + period + ',"time":' + time + ',"index":' + this._histIndex + ',"offset":9000}]');
+          return;   // exactly one request per tick
+        }
       }
     }, 2500);
   }
