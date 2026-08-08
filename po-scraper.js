@@ -1105,9 +1105,25 @@ class PoWsClient {
     try {
       await this._reportRepair('launching-chromium');
       const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
+      // Sticky session: persist the Chrome profile (PO cookies) on the Render
+      // Persistent Disk so the login survives restarts → far fewer relogins and
+      // 2captcha solves. Falls back to an ephemeral profile if the disk is absent.
+      const fs2 = require('fs'), path2 = require('path');
+      let profileDir = process.env.PO_PROFILE_DIR || '/data/po-profile';
+      let useProfile = true;
+      try { fs2.mkdirSync(profileDir, { recursive: true }); }
+      catch (_) { useProfile = false; }
+      if (useProfile) {
+        // Drop a stale singleton lock left by a previous crashed run so launch never hangs.
+        for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+          try { fs2.rmSync(path2.join(profileDir, f), { force: true }); } catch (_) {}
+        }
+        await this._reportRepair('profile-dir=' + profileDir);
+      }
       browser = await puppeteer.launch({
         headless: chromium.headless ?? true,
         executablePath: execPath || undefined,
+        userDataDir: useProfile ? profileDir : undefined,
         args: [...(chromium.args || []), '--no-sandbox', '--disable-setuid-sandbox',
                '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions',
                '--disable-background-networking', '--mute-audio',
@@ -1151,6 +1167,14 @@ class PoWsClient {
       await page.waitForSelector('input[type="password"], input[name="password"], #password', { timeout: 20_000 }).catch(() => {});
       await this._reportRepair('login-page-loaded');
 
+      // Sticky session: if the persistent Chrome profile still holds a valid PO
+      // login, PO redirects us off /login — skip the whole credential + reCAPTCHA
+      // flow (no 2captcha spent) and go straight to token capture below.
+      await new Promise(r => setTimeout(r, 1500));   // let any redirect settle
+      const alreadyIn = !onLogin() || (await grabCi()).length > 40;
+      if (alreadyIn) await this._reportRepair('sticky-session-valid → skip login+captcha ✅');
+
+      if (!alreadyIn) {
       // Fill credentials via the DOM (fires input/change so the framework sees them).
       const filled = await page.evaluate((em, pw) => {
         const q = (s) => document.querySelector(s);
@@ -1209,6 +1233,7 @@ class PoWsClient {
       await page.evaluate(() => { const b = document.querySelector('button[type="submit"], .login-form button, form button, button.btn'); if (b) b.click(); }).catch(() => {});
       await page.keyboard.press('Enter').catch(() => {});
       await this._reportRepair('login-submitted');
+      } // end if (!alreadyIn) — sticky session skips this whole login+captcha block
 
       // Success = we leave /login/  OR  a ci_session cookie appears. Poll both up to 45s.
       let ci = '';
