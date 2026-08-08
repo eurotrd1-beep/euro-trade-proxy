@@ -92,6 +92,51 @@ const MAX_CANDLES = 100;   // candles kept per series (served)
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
+// ── Small HTTPS JSON helper for the diagnostics endpoints (no fetch dependency).
+function httpsRequest(urlStr, { method = 'GET', headers = {}, body = null, timeoutMs = 30000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(urlStr); } catch (e) { return reject(e); }
+    const req = https.request(
+      { hostname: u.hostname, path: u.pathname + u.search, method, headers },
+      (r) => {
+        const chunks = [];
+        r.on('data', c => chunks.push(c));
+        r.on('end', () => resolve({ status: r.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+    req.end();
+  });
+}
+
+// Build the Arabic diagnosis prompt from the check report. Only STATUSES are sent
+// (the Flutter side scrubs secrets); we never add keys/tokens/user data here.
+function buildDiagnosePrompt(report) {
+  return [
+    'ده تقرير حالة نظام Euro Trade (تشخيص ذاتي من لوحة الأدمن).',
+    'البنية: Flutter Web + Supabase (Postgres + Realtime) + بروكسي على Render + Cloudflare Worker (كاش) + سكرابر أسعار Pocket Option.',
+    '',
+    'التقرير (JSON) — كل عنصر فيه اسم الفحص وحالته (ok/warn/fail) وتفاصيل:',
+    '```json',
+    JSON.stringify(report, null, 2).slice(0, 20000),
+    '```',
+    '',
+    'المطلوب منك:',
+    '- تحليل بالعربي المصري.',
+    '- إيه المشكلة الأساسية، وإيه اللي عرض وإيه اللي سبب جذري.',
+    '- خطوات مرتبة بالأولوية. لكل خطوة: لو الحل زرار في الصفحة اذكر اسمه بالظبط (زي "رجّع للبروكسي المباشر"، "افحص تاني"، "نبّه السكرابر")، ولو محتاج تدخل خارجي اذكر الموقع والخطوات. وقول "ليه دي الأول".',
+    '- إنت بتقترح بس — متقولش إنك نفّذت أي إصلاح.',
+    '',
+    'الشكل بالظبط:',
+    '🔍 التشخيص: [سطر أو اتنين]',
+    '⚠️ السبب الجذري: [أصل المشكلة]',
+    '📋 الخطوات:',
+    '١. [الخطوة] → [زرار كذا] أو [روح لـ كذا] — (ليه دي الأول: ...)',
+  ].join('\n');
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -246,6 +291,73 @@ const server = http.createServer(async (req, res) => {
       if (error) throw error;
       json({ ok: true });
     } catch (e) { json({ error: e.message }, 500); }
+    return;
+  }
+
+  // ── GET /api/captcha-balance — 2captcha remaining balance (view only) ────────
+  if (url.pathname === '/api/captcha-balance') {
+    const key = process.env.CAPTCHA_API_KEY || process.env.TWOCAPTCHA_API_KEY || '';
+    if (!key) { json({ available: false, reason: 'CAPTCHA_API_KEY غير مضبوط' }); return; }
+    try {
+      const r = await httpsRequest(
+        `https://2captcha.com/res.php?key=${encodeURIComponent(key)}&action=getbalance&json=1`,
+        { timeoutMs: 15000 });
+      let bal = null;
+      try { const p = JSON.parse(r.body); if (String(p.status) === '1') bal = parseFloat(p.request); } catch (_) {}
+      if (bal == null) { const f = parseFloat(r.body); if (isFinite(f)) bal = f; }
+      if (bal == null) { json({ available: false, reason: 'رد غير متوقع من 2captcha', raw: r.body.slice(0, 80) }); return; }
+      json({ available: true, balance: bal, currency: 'USD' });
+    } catch (e) { json({ available: false, reason: e.message }); }
+    return;
+  }
+
+  // ── GET /api/supabase-usage — project status + usage via Management API ───────
+  if (url.pathname === '/api/supabase-usage') {
+    const token = process.env.SUPABASE_MGMT_TOKEN || '';
+    const ref = (process.env.SUPABASE_URL || '').replace(/^https?:\/\//, '').split('.')[0];
+    if (!token) { json({ available: false, reason: 'SUPABASE_MGMT_TOKEN غير مضبوط' }); return; }
+    if (!ref)   { json({ available: false, reason: 'تعذّر استخراج ref المشروع' }); return; }
+    try {
+      const auth = { Authorization: 'Bearer ' + token };
+      const proj = await httpsRequest(`https://api.supabase.com/v1/projects/${ref}`, { headers: auth, timeoutMs: 15000 });
+      if (proj.status === 401) { json({ available: false, reason: 'التوكن غير صالح (401)' }); return; }
+      let projectStatus = null;
+      try { projectStatus = JSON.parse(proj.body).status; } catch (_) {}
+      let usage = null, usageError = null;
+      try {
+        const u = await httpsRequest(`https://api.supabase.com/v1/projects/${ref}/usage`, { headers: auth, timeoutMs: 15000 });
+        if (u.status === 200) usage = JSON.parse(u.body); else usageError = 'HTTP ' + u.status;
+      } catch (e) { usageError = e.message; }
+      json({ available: true, projectStatus, usage, usageError });
+    } catch (e) { json({ available: false, reason: e.message }); }
+    return;
+  }
+
+  // ── POST /api/diagnose — Gemini smart diagnosis (suggests only) ──────────────
+  if (url.pathname === '/api/diagnose' && req.method === 'POST') {
+    const key = process.env.GEMINI_API_KEY || '';
+    if (!key) { json({ available: false, reason: 'GEMINI_API_KEY غير مضبوط' }); return; }
+    const nowMs = Date.now();
+    if (nowMs - (global._lastDiagnose || 0) < 8000) {
+      json({ available: false, reason: 'استنى شوية (rate limit)' }, 429); return;
+    }
+    global._lastDiagnose = nowMs;
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 200000) req.destroy(); });
+    req.on('end', async () => {
+      let report; try { report = JSON.parse(raw || '{}'); } catch (_) { report = {}; }
+      try {
+        const gr = await httpsRequest(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: { contents: [{ parts: [{ text: buildDiagnosePrompt(report) }] }] },
+            timeoutMs: 30000 });
+        let text = '';
+        try { text = JSON.parse(gr.body).candidates[0].content.parts[0].text; } catch (_) {}
+        if (!text) { json({ available: false, reason: 'Gemini لم يرجّع نصاً', status: gr.status }); return; }
+        json({ available: true, text });
+      } catch (e) { json({ available: false, reason: e.message }); }
+    });
     return;
   }
 
