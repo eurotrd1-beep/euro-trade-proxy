@@ -360,24 +360,30 @@ class CandleStore {
     if (!db || !symbols.length) return;
     const keys = [];
     for (const s of symbols) for (const iv of IVS) keys.push(`${s}_${iv}`);
-    try {
-      const { data, error } = await db.from('candles').select('key, data').in('key', keys);
-      if (error) { err('hydrate error:', error.message); return; }
-      let n = 0;
-      for (const row of (data || [])) {
-        if (row.key && Array.isArray(row.data) && row.data.length) {
-          const clean = sanitizeCandles(row.data);
-          if (!clean.length) continue;
-          this.candles[row.key] = clean;
-          // NOTE: don't re-save here. Mass-writing every cleaned key on boot
-          // (150 keys × 2 instances) bursts the DB and choked it. hydrate/seed/
-          // tick all filter future candles on the fly, so in-memory is always
-          // clean; each key's next natural _save purges its Supabase row anyway.
-          n++;
+    // Read in SMALL sequential batches. One `.in('key', ~900 keys)` returns ~900
+    // rows of big JSON at once — it blows past Postgres' statement_timeout on
+    // small compute (57014 → 504) and hogs the whole connection pool (PGRST003),
+    // so concurrent live upserts 504 too. Batches keep every query fast + the
+    // pool free. (Still no re-save on boot: in-memory is filtered clean on the
+    // fly, and each key's next natural _save purges its Supabase row.)
+    const CHUNK = 40;
+    let n = 0;
+    for (let i = 0; i < keys.length; i += CHUNK) {
+      const batch = keys.slice(i, i + CHUNK);
+      try {
+        const { data, error } = await db.from('candles').select('key, data').in('key', batch);
+        if (error) { err('hydrate batch error:', error.message); continue; }
+        for (const row of (data || [])) {
+          if (row.key && Array.isArray(row.data) && row.data.length) {
+            const clean = sanitizeCandles(row.data);
+            if (!clean.length) continue;
+            this.candles[row.key] = clean;
+            n++;
+          }
         }
-      }
-      if (n) log(`hydrated ${n} OTC candle series`);
-    } catch (e) { err('hydrate failed:', e.message); }
+      } catch (e) { err('hydrate batch failed:', e.message); }
+    }
+    if (n) log(`hydrated ${n} OTC candle series (${Math.ceil(keys.length / CHUNK)} batches)`);
   }
 
   tick(symbol, price) {
@@ -470,7 +476,11 @@ class CandleStore {
   _schedSave(key) {
     if (!db) return;
     if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
-    this._saveTimers[key] = setTimeout(() => { delete this._saveTimers[key]; this._save(key); }, 3000);
+    // 3s debounce + up to 5s jitter: many keys roll over at the SAME minute
+    // boundary, so a fixed delay fires all their upserts in one burst that
+    // choked the DB. Jitter spreads the writes over a window instead.
+    const delay = 3000 + Math.floor(Math.random() * 5000);
+    this._saveTimers[key] = setTimeout(() => { delete this._saveTimers[key]; this._save(key); }, delay);
   }
 
   _save(key) {
