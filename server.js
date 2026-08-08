@@ -518,16 +518,28 @@ server.listen(PORT, () => {
             await db.from('configs').update({ data: { ...cur, requestedAt: new Date().toISOString(), status: 'requested' } }).eq('id', 'otc_scan');
           } catch (_) {}
         }
-        // 2) alert (debounced 30 min), only if Telegram is configured
-        if (token && chat && now - wd.alertedAt > 30 * 60 * 1000) {
+        // 2) record the incident (debounced 30 min) into repair_log so the repair
+        //    page shows it in its notifications panel. Telegram only if configured.
+        if (now - wd.alertedAt > 30 * 60 * 1000) {
           wd.alertedAt = now;
           const detail = syms === 0 ? 'مفيش رموز (0)' : ('متجمّدة من ' + Math.round(age) + 'ث');
-          const msg = `🔴 Euro Trade — الأسعار ${detail}.\nجرّبت أعيد الفحص تلقائياً. لو استمر: افتح "إصلاح النظام" وجرّب "رجّع للبروكسي المباشر" أو الصق توكن PO جديد.`;
-          try {
-            await httpsRequest(`https://api.telegram.org/bot${token}/sendMessage`,
-              { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: { chat_id: chat, text: msg, disable_web_page_preview: true }, timeoutMs: 15000 });
-          } catch (_) {}
+          if (db) {
+            try {
+              await db.from('repair_log').insert({
+                action: 'watchdog',
+                result: 'الأسعار ' + detail + ' — جرّبت أعيد الفحص تلقائياً',
+                at: new Date().toISOString(),
+              });
+            } catch (_) {}
+          }
+          if (token && chat) {
+            const msg = `🔴 Euro Trade — الأسعار ${detail}.`;
+            try {
+              await httpsRequest(`https://api.telegram.org/bot${token}/sendMessage`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: { chat_id: chat, text: msg, disable_web_page_preview: true }, timeoutMs: 15000 });
+            } catch (_) {}
+          }
         }
       } catch (_) {}
     }, 2 * 60 * 1000);
