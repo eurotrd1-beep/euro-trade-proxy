@@ -348,25 +348,33 @@ const server = http.createServer(async (req, res) => {
     req.on('data', c => { raw += c; if (raw.length > 200000) req.destroy(); });
     req.on('end', async () => {
       let report; try { report = JSON.parse(raw || '{}'); } catch (_) { report = {}; }
-      try {
-        const gr = await httpsRequest(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: { contents: [{ parts: [{ text: buildDiagnosePrompt(report) }] }] },
-            timeoutMs: 30000 });
-        let parsed = null;
-        try { parsed = JSON.parse(gr.body); } catch (_) {}
-        let text = '';
-        try { text = parsed.candidates[0].content.parts[0].text; } catch (_) {}
-        if (!text) {
+      const prompt = buildDiagnosePrompt(report);
+      // Free-tier model availability varies by key/region (some return limit:0),
+      // so try current models in order and use the first that actually returns
+      // text. limit:0 quota errors come back instantly, so misses cost nothing.
+      const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+      let lastReason = 'Gemini لم يرجّع نصاً', lastStatus = 0, lastGStatus = null;
+      for (const model of MODELS) {
+        try {
+          const gr = await httpsRequest(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: { contents: [{ parts: [{ text: prompt }] }] },
+              timeoutMs: 30000 });
+          let parsed = null;
+          try { parsed = JSON.parse(gr.body); } catch (_) {}
+          let text = '';
+          try { text = parsed.candidates[0].content.parts[0].text; } catch (_) {}
+          if (text) { json({ available: true, text, model }); return; }
           const gerr = parsed && parsed.error;
-          json({ available: false,
-                 reason: (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : 'Gemini لم يرجّع نصاً',
-                 status: gr.status,
-                 googleStatus: (gerr && gerr.status) || null }); return;
-        }
-        json({ available: true, text });
-      } catch (e) { json({ available: false, reason: e.message }); }
+          lastStatus  = gr.status;
+          lastGStatus = (gerr && gerr.status) || null;
+          lastReason  = (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : lastReason;
+          // 400/401/403 = key/request problem, not model availability — stop early.
+          if (gr.status && gr.status !== 429 && gr.status !== 404) break;
+        } catch (e) { lastReason = e.message; }
+      }
+      json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus });
     });
     return;
   }
