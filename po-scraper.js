@@ -1492,6 +1492,7 @@ class PoWsClient {
       // Merge with the current row so we DON'T wipe fields other writers own
       // (cfg from boot, repairTrail/repairStageAt from _reportRepair).
       const { data } = await db.from('configs').select('data').eq('id', 'otc_status').single();
+      const cur = (data && data.data) || {};   // FIX: was referencing undefined `cur`
       const statusData = {
         ...cur,
         connected: !!patch.connected, loggedIn: !!patch.loggedIn, phase: this._phase,
