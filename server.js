@@ -51,8 +51,11 @@ wss.on('connection', (ws, req) => {
       const msg = JSON.parse(data.toString());
       const subs = clientMap.get(ws);
       if (!subs) return;
-      if (msg.sub)   subs.add(msg.sub);
-      if (msg.unsub) subs.delete(msg.unsub);
+      // Only accept STRING symbols, and cap the set — a non-string sub used to
+      // crash bareSymbol() on the next broadcast (remote DoS), and an unbounded
+      // set let one client grow memory + CPU without limit.
+      if (typeof msg.sub === 'string' && subs.size < 64) subs.add(msg.sub);
+      if (typeof msg.unsub === 'string') subs.delete(msg.unsub);
     } catch (_) {}
   });
   const cleanup = () => {
@@ -64,9 +67,10 @@ wss.on('connection', (ws, req) => {
   ws.on('error', cleanup);
 });
 
-// Strip prefix if present, return bare symbol
+// Strip prefix if present, return bare symbol. String() coercion so a stray
+// non-string can never throw here (defense in depth with the WS type-guard).
 function bareSymbol(sym) {
-  return sym.replace(/^[A-Z]+:/, '').replace(/_/g, '').toUpperCase();
+  return String(sym).replace(/^[A-Z]+:/, '').replace(/_/g, '').toUpperCase();
 }
 
 // Push OTC prices to browser WS clients. The chart subscribes with the BARE
@@ -236,64 +240,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── POST /api/pairs — add a pair ────────────────────────────────────────────
-  if (url.pathname === '/api/pairs' && req.method === 'POST') {
-    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
-    let body = '';
-    req.on('data', c => { body += c; });
-    req.on('end', async () => {
-      try {
-        const { symbol, chartSymbol, category, type, order } = JSON.parse(body || '{}');
-        if (!symbol || !chartSymbol) { json({ error: 'symbol and chartSymbol required' }, 400); return; }
-        const { data, error } = await db.from('pairs').insert({
-          symbol, chart_symbol: chartSymbol,
-          source:   'po',
-          category: category || 'forex',
-          type:     type     || category || 'forex',
-          order:    order    || Date.now(),
-        }).select('id').single();
-        if (error) throw error;
-        json({ id: data.id });
-      } catch (e) { json({ error: e.message }, 500); }
-    });
-    return;
-  }
-
-  // ── PUT /api/pairs/:docId — update a pair ───────────────────────────────────
-  if (url.pathname.startsWith('/api/pairs/') && req.method === 'PUT') {
-    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
-    const docId = url.pathname.replace('/api/pairs/', '').trim();
-    if (!docId) { json({ error: 'docId required' }, 400); return; }
-    let body = '';
-    req.on('data', c => { body += c; });
-    req.on('end', async () => {
-      try {
-        const { symbol, chartSymbol, category, type } = JSON.parse(body || '{}');
-        const updates = {};
-        if (symbol) updates.symbol = symbol;
-        if (chartSymbol) updates.chart_symbol = chartSymbol;
-        if (category) updates.category = category;
-        if (type) updates.type = type;
-        const { error } = await db.from('pairs').update(updates).eq('id', docId);
-        if (error) throw error;
-        json({ ok: true });
-      } catch (e) { json({ error: e.message }, 500); }
-    });
-    return;
-  }
-
-  // ── DELETE /api/pairs/:docId — remove a pair ─────────────────────────────
-  if (url.pathname.startsWith('/api/pairs/') && req.method === 'DELETE') {
-    if (!db) { json({ error: 'Supabase not available' }, 503); return; }
-    const docId = url.pathname.replace('/api/pairs/', '').trim();
-    if (!docId) { json({ error: 'docId required' }, 400); return; }
-    try {
-      const { error } = await db.from('pairs').delete().eq('id', docId);
-      if (error) throw error;
-      json({ ok: true });
-    } catch (e) { json({ error: e.message }, 500); }
-    return;
-  }
+  // NOTE: the old /api/pairs POST/PUT/DELETE endpoints were removed — they had
+  // NO caller (the admin writes the `pairs` table directly via Supabase) and were
+  // an unauthenticated, unbounded-body DB-write surface. Do not re-add without auth.
 
   // ── GET /api/captcha-balance — 2captcha remaining balance (view only) ────────
   if (url.pathname === '/api/captcha-balance') {
@@ -396,6 +345,13 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/render-restart' && req.method === 'POST') {
     const key = process.env.RENDER_API_KEY || '';
     if (!key) { json({ available: false, reason: 'RENDER_API_KEY غير مضبوط' }); return; }
+    // Rate-limit: at most one redeploy per 3 min so this endpoint can't be used
+    // to loop-restart the service into a permanent outage.
+    const nowMs = Date.now();
+    if (nowMs - (global._lastRestartAt || 0) < 3 * 60 * 1000) {
+      json({ available: false, reason: 'استنى ~3 دقايق بين مرات إعادة التشغيل' }, 429); return;
+    }
+    global._lastRestartAt = nowMs;
     const name = process.env.RENDER_SERVICE_NAME || 'euro-trade-proxy-1';
     const auth = { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Accept: 'application/json' };
     try {

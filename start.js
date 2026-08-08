@@ -4,12 +4,18 @@
  * Single entry point for Render.
  *
  *   • server.js     — the HTTP/WS API host: OTC price WebSocket (/ws), candle +
- *                     status endpoints (/api/otc/*), and pairs CRUD (/api/pairs).
+ *                     status endpoints (/api/otc/*), and self-heal/ops endpoints.
  *   • po-scraper.js — the OTC (Pocket Option) scraper that feeds it.
  *
  * If the OTC scraper ever throws on boot, the HTTP/WS host keeps running:
  * each module owns its own error handling and lifecycle.
  */
+
+// ── Last-resort process guards ────────────────────────────────────────────────
+// A stray throw in a timer/WS callback (e.g. bad client input) must NEVER take
+// the whole service down. Log and keep running; each subsystem self-heals.
+process.on('uncaughtException',  (e) => { try { console.error('[uncaughtException]', e && e.stack || e); } catch (_) {} });
+process.on('unhandledRejection', (e) => { try { console.error('[unhandledRejection]', e && e.stack || e); } catch (_) {} });
 
 // ── Load .env (LOCAL dev only; on Render the vars come from the dashboard) ─────
 // Tiny parser, no dependency. Never overrides a var already set in the real env.

@@ -1087,9 +1087,10 @@ class PoWsClient {
       // in a single snapshot — repairDiag alone only shows the latest step.
       const trail = Array.isArray(cur.repairTrail) ? cur.repairTrail.slice(-11) : [];
       trail.push(now.slice(11, 19) + ' ' + stage);
-      await db.from('configs').update({
+      await db.from('configs').upsert({
+        id: 'otc_status',
         data: { ...cur, repairDiag: stage, repairStageAt: now, repairTrail: trail },
-      }).eq('id', 'otc_status');
+      });
     } catch (_) {}
   }
 
@@ -1471,7 +1472,7 @@ class PoWsClient {
     if (!db) return;
     if (now - this._lastPricesDbWrite < PRICE_DB_MS) return;
     this._lastPricesDbWrite = now;
-    db.from('configs').update({ data: snapshot }).eq('id', 'otc_prices')
+    db.from('configs').upsert({ id: 'otc_prices', data: snapshot })
       .then(({ error }) => { if (error) err('otc_prices write:', error.message); })
       .catch(e => err('otc_prices write:', e.message));
   }
@@ -1505,9 +1506,10 @@ class PoWsClient {
         updatedAt: new Date().toISOString(),
       };
       global.otcStatus = statusData;
-      await db.from('configs').update({
+      await db.from('configs').upsert({
+        id: 'otc_status',
         data: statusData,
-      }).eq('id', 'otc_status');
+      });
     } catch (_) {}
   }
 
@@ -1571,7 +1573,7 @@ class PoWsClient {
     try {
       const { data } = await db.from('configs').select('data').eq('id', 'otc_scan').single();
       const cur = (data && data.data) || {};
-      await db.from('configs').update({ data: { ...cur, ...patch, updatedAt: new Date().toISOString() } }).eq('id', 'otc_scan');
+      await db.from('configs').upsert({ id: 'otc_scan', data: { ...cur, ...patch, updatedAt: new Date().toISOString() } });
     } catch (_) {}
   }
 }
@@ -1625,7 +1627,7 @@ async function start() {
         cfg: `build=${BUILD} email=${!!PO_EMAIL} pass=${!!PO_PASSWORD} captcha=${!!CAPTCHA_API_KEY} authLen=${(activeAuth || '').length} ws=${(activeWsUrl || '').replace(/\?.*/, '')}`,
       };
       global.otcStatus = statusData;
-      await db.from('configs').update({ data: statusData }).eq('id', 'otc_status');
+      await db.from('configs').upsert({ id: 'otc_status', data: statusData });
     } catch (_) {}
   }
 
@@ -1643,12 +1645,25 @@ async function start() {
   setInterval(() => client.tickAll(), PRICE_MS);
 
   if (db) {
+    // Debounce: a "جلب الأزواج" scan upserts hundreds of otc_pairs rows and
+    // Postgres emits ONE realtime event per row. Running loadEnabledSymbols +
+    // hydrate (batched DB reads) + _subscribeAll for every event recreates the
+    // DB-choke + PO subscribe-flood we fixed elsewhere. Coalesce a burst into a
+    // SINGLE refresh ~2s after it goes quiet.
+    let pairsRefreshTimer = null;
+    const refreshEnabledPairs = () => {
+      if (pairsRefreshTimer) clearTimeout(pairsRefreshTimer);
+      pairsRefreshTimer = setTimeout(async () => {
+        pairsRefreshTimer = null;
+        try {
+          const syms = await loadEnabledSymbols();
+          client.applyEnabled(syms);
+          await client.store.hydrate(syms);
+        } catch (e) { err('otc_pairs refresh:', e.message); }
+      }, 2000);
+    };
     db.channel('otc-pairs-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'otc_pairs' }, async () => {
-        const syms = await loadEnabledSymbols();
-        client.applyEnabled(syms);
-        await client.store.hydrate(syms);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'otc_pairs' }, refreshEnabledPairs)
       .subscribe(s => { if (s === 'SUBSCRIBED') log('otc_pairs realtime active'); });
 
     let lastScanReq = null;
