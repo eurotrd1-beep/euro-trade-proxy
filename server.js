@@ -326,7 +326,9 @@ const server = http.createServer(async (req, res) => {
       let usage = null, usageError = null;
       try {
         const u = await httpsRequest(`https://api.supabase.com/v1/projects/${ref}/usage`, { headers: auth, timeoutMs: 15000 });
-        if (u.status === 200) usage = JSON.parse(u.body); else usageError = 'HTTP ' + u.status;
+        if (u.status === 200) usage = JSON.parse(u.body);
+        else if (u.status === 404) usageError = 'الاستهلاك التفصيلي متاح على الداشبورد فقط (مش عبر الـ API)';
+        else usageError = 'HTTP ' + u.status;
       } catch (e) { usageError = e.message; }
       json({ available: true, projectStatus, usage, usageError });
     } catch (e) { json({ available: false, reason: e.message }); }
@@ -352,9 +354,17 @@ const server = http.createServer(async (req, res) => {
           { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: { contents: [{ parts: [{ text: buildDiagnosePrompt(report) }] }] },
             timeoutMs: 30000 });
+        let parsed = null;
+        try { parsed = JSON.parse(gr.body); } catch (_) {}
         let text = '';
-        try { text = JSON.parse(gr.body).candidates[0].content.parts[0].text; } catch (_) {}
-        if (!text) { json({ available: false, reason: 'Gemini لم يرجّع نصاً', status: gr.status }); return; }
+        try { text = parsed.candidates[0].content.parts[0].text; } catch (_) {}
+        if (!text) {
+          const gerr = parsed && parsed.error;
+          json({ available: false,
+                 reason: (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : 'Gemini لم يرجّع نصاً',
+                 status: gr.status,
+                 googleStatus: (gerr && gerr.status) || null }); return;
+        }
         json({ available: true, text });
       } catch (e) { json({ available: false, reason: e.message }); }
     });
