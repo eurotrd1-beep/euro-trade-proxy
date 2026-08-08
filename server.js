@@ -73,6 +73,7 @@ function bareSymbol(sym) {
 // symbol while the scraper may broadcast a suffixed one — match on the bare
 // form so the live price actually reaches the client (otherwise it freezes).
 global.broadcastOtcPrice = function(otcSym, price) {
+  global.otcLastTick = Date.now();   // freshness heartbeat (used by the watchdog)
   const bare = bareSymbol(otcSym);
   for (const [ws, subs] of clientMap) {
     if (ws.readyState !== WebSocket.OPEN) continue;
@@ -379,6 +380,93 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── GET /api/ops-status — which self-heal ops are configured (booleans only) ──
+  if (url.pathname === '/api/ops-status') {
+    json({
+      render:   !!process.env.RENDER_API_KEY,
+      telegram: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    });
+    return;
+  }
+
+  // ── POST /api/render-restart — redeploy THIS service via the Render API ───────
+  // RENDER_API_KEY is env-only (never exposed). Discovers the service by name
+  // (RENDER_SERVICE_NAME, default euro-trade-proxy-1) then triggers a deploy —
+  // exactly what "Manual Deploy" does. Restart only: no config/trading/secrets.
+  if (url.pathname === '/api/render-restart' && req.method === 'POST') {
+    const key = process.env.RENDER_API_KEY || '';
+    if (!key) { json({ available: false, reason: 'RENDER_API_KEY غير مضبوط' }); return; }
+    const name = process.env.RENDER_SERVICE_NAME || 'euro-trade-proxy-1';
+    const auth = { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Accept: 'application/json' };
+    try {
+      let id = global._renderServiceId || process.env.RENDER_SERVICE_ID || '';
+      if (!id) {
+        const list = await httpsRequest('https://api.render.com/v1/services?limit=100', { headers: auth, timeoutMs: 15000 });
+        if (list.status !== 200) { json({ available: false, reason: 'Render list HTTP ' + list.status }); return; }
+        let arr = []; try { arr = JSON.parse(list.body); } catch (_) {}
+        for (const it of arr) { const s = it.service || it; if (s && s.name === name) { id = s.id; break; } }
+        if (!id) { json({ available: false, reason: 'مالقيتش خدمة اسمها ' + name }); return; }
+        global._renderServiceId = id;
+      }
+      const dep = await httpsRequest(`https://api.render.com/v1/services/${id}/deploys`,
+        { method: 'POST', headers: auth, body: { clearCache: 'do_not_clear' }, timeoutMs: 20000 });
+      if (dep.status === 201 || dep.status === 200) {
+        let depId = null; try { depId = JSON.parse(dep.body).id; } catch (_) {}
+        json({ ok: true, available: true, deployId: depId, service: name });
+      } else {
+        json({ available: false, reason: 'Render deploy HTTP ' + dep.status, raw: dep.body.slice(0, 120) });
+      }
+    } catch (e) { json({ available: false, reason: e.message }); }
+    return;
+  }
+
+  // ── POST /api/alert — push a Telegram message (self-heal notifications) ───────
+  // Body {text} to send, or {test:true} for a setup test. Token + chat id are
+  // env-only. Only the admin-composed text is sent — never keys or user data.
+  if (url.pathname === '/api/alert' && req.method === 'POST') {
+    const token = process.env.TELEGRAM_BOT_TOKEN || '';
+    const chat  = process.env.TELEGRAM_CHAT_ID || '';
+    if (!token || !chat) { json({ available: false, reason: 'TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID غير مضبوطين' }); return; }
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 20000) req.destroy(); });
+    req.on('end', async () => {
+      let b = {}; try { b = JSON.parse(raw || '{}'); } catch (_) {}
+      const text = b.test ? '✅ اختبار تنبيه Euro Trade — التنبيهات شغّالة.' : String(b.text || '').slice(0, 3500);
+      if (!text) { json({ available: false, reason: 'مفيش نص' }); return; }
+      try {
+        const r = await httpsRequest(`https://api.telegram.org/bot${token}/sendMessage`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: { chat_id: chat, text, disable_web_page_preview: true }, timeoutMs: 15000 });
+        if (r.status === 200) { json({ ok: true, available: true }); return; }
+        let d = ''; try { d = JSON.parse(r.body).description; } catch (_) {}
+        json({ available: false, reason: d || ('Telegram HTTP ' + r.status) });
+      } catch (e) { json({ available: false, reason: e.message }); }
+    });
+    return;
+  }
+
+  // ── GET /api/telegram-chat-id — setup helper: last chat(s) that messaged the
+  // bot, so the admin can grab TELEGRAM_CHAT_ID without guesswork. ─────────────
+  if (url.pathname === '/api/telegram-chat-id') {
+    const token = process.env.TELEGRAM_BOT_TOKEN || '';
+    if (!token) { json({ available: false, reason: 'TELEGRAM_BOT_TOKEN غير مضبوط' }); return; }
+    try {
+      const r = await httpsRequest(`https://api.telegram.org/bot${token}/getUpdates`, { timeoutMs: 15000 });
+      const ids = [];
+      try {
+        const u = JSON.parse(r.body);
+        for (const up of (u.result || [])) {
+          const m = up.message || up.edited_message || up.channel_post;
+          if (m && m.chat && m.chat.id != null) ids.push({ id: m.chat.id, name: m.chat.title || m.chat.first_name || m.chat.username || '' });
+        }
+      } catch (_) {}
+      const uniq = []; const seen = new Set();
+      for (const x of ids.reverse()) { if (!seen.has(x.id)) { seen.add(x.id); uniq.push(x); } }
+      json({ available: true, chats: uniq.slice(0, 5), hint: uniq.length ? '' : 'ابعت رسالة للبوت الأول من تيليجرام وبعدين جرّب تاني' });
+    } catch (e) { json({ available: false, reason: e.message }); }
+    return;
+  }
+
   res.writeHead(404); res.end('Not found');
 
 });
@@ -404,5 +492,45 @@ server.listen(PORT, () => {
       https.get(SELF_URL + '/health', r => r.resume()).on('error', () => {});
     } catch (_) {}
   }, 10 * 60 * 1000);
+
+  // ── Self-heal watchdog ──────────────────────────────────────────────────────
+  // Every 2 min: if the OTC feed is frozen (no tick > 3 min) or serves 0 symbols,
+  // try ONE safe rescan (writes otc_scan — the scraper re-lists pairs; it NEVER
+  // re-logs-in, so captcha/login are untouched) and, if it stays down, send a
+  // debounced Telegram alert. Detect + safe-nudge + notify only — no trading
+  // logic changes, no secrets in code. Disable with WATCHDOG_ENABLED=0.
+  if (process.env.WATCHDOG_ENABLED !== '0') {
+    const wd = { nudgedAt: 0, alertedAt: 0 };
+    setInterval(async () => {
+      try {
+        const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
+        const syms = (global.otcPrices && Object.keys(global.otcPrices).length) || 0;
+        const age  = global.otcLastTick ? (Date.now() - global.otcLastTick) / 1000 : Infinity;
+        const down = syms === 0 || age > 180;
+        if (!down) return;
+        const now = Date.now();
+        // 1) one safe rescan, at most once / 5 min
+        if (db && now - wd.nudgedAt > 5 * 60 * 1000) {
+          wd.nudgedAt = now;
+          try {
+            const { data } = await db.from('configs').select('data').eq('id', 'otc_scan').single();
+            const cur = (data && data.data) || {};
+            await db.from('configs').update({ data: { ...cur, requestedAt: new Date().toISOString(), status: 'requested' } }).eq('id', 'otc_scan');
+          } catch (_) {}
+        }
+        // 2) alert (debounced 30 min), only if Telegram is configured
+        if (token && chat && now - wd.alertedAt > 30 * 60 * 1000) {
+          wd.alertedAt = now;
+          const detail = syms === 0 ? 'مفيش رموز (0)' : ('متجمّدة من ' + Math.round(age) + 'ث');
+          const msg = `🔴 Euro Trade — الأسعار ${detail}.\nجرّبت أعيد الفحص تلقائياً. لو استمر: افتح "إصلاح النظام" وجرّب "رجّع للبروكسي المباشر" أو الصق توكن PO جديد.`;
+          try {
+            await httpsRequest(`https://api.telegram.org/bot${token}/sendMessage`,
+              { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: { chat_id: chat, text: msg, disable_web_page_preview: true }, timeoutMs: 15000 });
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }, 2 * 60 * 1000);
+  }
 
 });
