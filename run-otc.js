@@ -33,9 +33,9 @@ process.env.PO_WS_URL = cap.wsUrl || 'wss://api-eu.po.market/socket.io/?EIO=4&tr
 process.env.PO_AUTH   = authFrame.frame.replace(/^\d+/, '');   // ["auth",{...}]
 
 // 2) Supabase (anon key is fine — RLS is open for writes). Same project as the app.
-process.env.SUPABASE_URL         = process.env.SUPABASE_URL || 'https://jmxyxwkrzjynsblidors.supabase.co';
+process.env.SUPABASE_URL         = process.env.SUPABASE_URL || 'https://dlzqdmqkvlvwnjhqxqym.supabase.co';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpteHl4d2tyemp5bnNibGlkb3JzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NzgzNDIsImV4cCI6MjA5OTI1NDM0Mn0.gzT8_OLDNRacUA3i2U3BmO7AwqWHHd7n0WDba8-z9fo';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsenFkbXFrdmx2d25qaHF4cXltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2ODk3OTQsImV4cCI6MjA5ODI2NTc5NH0.Gchfry1V4vDnwSKk-uF9r7C10PfhXUkt2E4EpWGbdAg';
 
 // 3) No browser recapture on the PC — the local token already works here.
 process.env.PO_EMAIL = '';

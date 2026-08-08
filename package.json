@@ -4,7 +4,7 @@
   "main": "start.js",
   "scripts": {
     "start": "node start.js",
-    "start:tv": "node server.js",
+    "start:api": "node server.js",
     "start:otc": "node po-scraper.js"
   },
   "dependencies": {
