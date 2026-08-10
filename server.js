@@ -329,6 +329,71 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── POST /api/gemini — generic prompt passthrough ────────────────────────────
+  // /api/diagnose builds its own prompt from a health report, so it cannot be
+  // reused for anything else. This one forwards whatever the caller sends,
+  // which is what the admin's strategy generator needs.
+  //
+  // The key stays here. Calling Google from the browser would mean shipping it
+  // to every visitor.
+  if (url.pathname === '/api/gemini' && req.method === 'POST') {
+    const key = process.env.GEMINI_API_KEY || '';
+    if (!key) { json({ available: false, reason: 'GEMINI_API_KEY غير مضبوط' }); return; }
+
+    const nowMs = Date.now();
+    if (nowMs - (global._lastGemini || 0) < 5000) {
+      json({ available: false, reason: 'استنى شوية (rate limit)' }, 429); return;
+    }
+    global._lastGemini = nowMs;
+
+    let raw = '';
+    // The strategy prompt carries the whole indicator catalogue, so the cap is
+    // larger than /api/diagnose's — but still a cap.
+    req.on('data', c => { raw += c; if (raw.length > 400000) req.destroy(); });
+    req.on('end', async () => {
+      let body; try { body = JSON.parse(raw || '{}'); } catch (_) { body = {}; }
+      const prompt = typeof body.prompt === 'string' ? body.prompt : '';
+      if (!prompt) { json({ available: false, reason: 'prompt مفقود' }, 400); return; }
+
+      // Same ladder as /api/diagnose: free-tier model availability varies by
+      // key and region, and a limit:0 quota error returns instantly, so trying
+      // the next one costs nothing.
+      const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+      let lastReason = 'Gemini لم يرجّع نصاً', lastStatus = 0, lastGStatus = null;
+
+      for (const model of MODELS) {
+        try {
+          const gr = await httpsRequest(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: {
+                contents: [{ parts: [{ text: prompt }] }],
+                // Strategies are structural, not creative — a low temperature
+                // keeps the model from inventing indicator names.
+                generationConfig: {
+                  temperature: typeof body.temperature === 'number' ? body.temperature : 0.4,
+                  maxOutputTokens: 8192,
+                  responseMimeType: body.json === true ? 'application/json' : 'text/plain',
+                },
+              },
+              timeoutMs: 60000 });
+          let parsed = null;
+          try { parsed = JSON.parse(gr.body); } catch (_) {}
+          let text = '';
+          try { text = parsed.candidates[0].content.parts[0].text; } catch (_) {}
+          if (text) { json({ available: true, text, model }); return; }
+          const gerr = parsed && parsed.error;
+          lastStatus  = gr.status;
+          lastGStatus = (gerr && gerr.status) || null;
+          lastReason  = (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : lastReason;
+          if (gr.status && gr.status !== 429 && gr.status !== 404) break;
+        } catch (e) { lastReason = e.message; }
+      }
+      json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus });
+    });
+    return;
+  }
+
   // ── GET /api/ops-status — which self-heal ops are configured (booleans only) ──
   if (url.pathname === '/api/ops-status') {
     json({
