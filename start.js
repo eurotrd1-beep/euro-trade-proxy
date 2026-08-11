@@ -48,3 +48,15 @@ try {
 } catch (e) {
   console.error('[start] OTC scraper failed to load — API host unaffected:', e.message);
 }
+
+// Server-side signal generator. Runs the trading engine over the scraper's
+// IN-MEMORY candles and prices — never reads candles from Supabase — and
+// records every signal against the strategy version that produced it, so
+// "this version scored 58% over 340 signals" is answerable later.
+// Starts 15s after boot (by which time the scraper has candles) unless
+// SIGNAL_GENERATOR=0.
+try {
+  require('./signal-generator.js');
+} catch (e) {
+  console.error('[start] signal generator failed to load — everything else unaffected:', e.message);
+}
