@@ -213,9 +213,14 @@ const server = http.createServer(async (req, res) => {
     let prices = global.otcPrices;
     let status = global.otcStatus;
 
+    // Cold start only: until the scraper has ticked, serve the last snapshot.
+    // It lives in `price_snapshot` rather than `configs` because the app
+    // subscribes to every configs change, and a 16.6KB row rewritten every 20s
+    // was being broadcast to every open app for nothing. The JSON shape this
+    // endpoint returns is unchanged, so no client cares where it came from.
     if (!prices && db) {
       try {
-        const { data } = await db.from('configs').select('data').eq('id', 'otc_prices').single();
+        const { data } = await db.from('price_snapshot').select('data').eq('id', 'otc_prices').single();
         prices = data && data.data;
       } catch (_) {}
     }

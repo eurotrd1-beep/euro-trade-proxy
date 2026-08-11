@@ -1466,15 +1466,24 @@ class PoWsClient {
 
     // Persist to Supabase only every PRICE_DB_MS. The app reads prices from the
     // in-memory snapshot above (via the proxy /api/otc/status), so the DB copy is
-    // ONLY a cold-start fallback. Updating this single hot configs/otc_prices row
-    // every 700ms (× multiple proxy instances) caused Postgres row-lock
-    // contention → statement timeouts → the whole DB choking (Cloudflare 522).
+    // ONLY a cold-start fallback. Updating this single hot row every 700ms
+    // (× multiple proxy instances) caused Postgres row-lock contention →
+    // statement timeouts → the whole DB choking (Cloudflare 522).
+    //
+    // `price_snapshot`, NOT `configs`. The app subscribes to postgres_changes on
+    // the WHOLE configs table, so while this row lived there every 20s write was
+    // broadcast to every open app — 16.6KB, 180 times an hour, per user, of a
+    // row none of them reads. That alone was 4.3M realtime messages a month at
+    // 100 users against a 5M ceiling. price_snapshot is deliberately OUTSIDE the
+    // realtime publication; read supabase/migrations/20260811_price_snapshot.sql
+    // before ever adding it back.
     if (!db) return;
     if (now - this._lastPricesDbWrite < PRICE_DB_MS) return;
     this._lastPricesDbWrite = now;
-    db.from('configs').upsert({ id: 'otc_prices', data: snapshot })
-      .then(({ error }) => { if (error) err('otc_prices write:', error.message); })
-      .catch(e => err('otc_prices write:', e.message));
+    db.from('price_snapshot')
+      .upsert({ id: 'otc_prices', data: snapshot, updated_at: new Date().toISOString() })
+      .then(({ error }) => { if (error) err('price_snapshot write:', error.message); })
+      .catch(e => err('price_snapshot write:', e.message));
   }
 
   applyEnabled(symbols) {
