@@ -84,30 +84,21 @@ try {
   err('supabase client unavailable:', e.message);
 }
 
-// ── Telegram ────────────────────────────────────────────────────────────────
+// ── Alerts ──────────────────────────────────────────────────────────────────
 
 /**
- * Only fires for things that need a human the same day. The write cap being
- * hit is exactly that: it means signals are being dropped right now, and
- * finding out at the end of the month is finding out too late.
+ * Loud, and only for things that need a human.
+ *
+ * Written to stderr rather than pushed anywhere. The write cap being hit means
+ * signals are being dropped right now, so it is logged once per day at ERROR
+ * level and the flag stays raised until the day rolls over — a line that
+ * repeats every minute is a line nobody reads.
+ *
+ * `signal_write_budget.capped` in the database records the same fact durably,
+ * so a log that scrolled away does not lose it.
  */
-async function alert(text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chat = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chat) {
-    log('ALERT (تيليجرام غير مضبوط):', text);
-    return;
-  }
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, text }),
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch (e) {
-    err('telegram:', e.message);
-  }
+function alert(text) {
+  err('══ تنبيه ══', text);
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -362,10 +353,9 @@ async function flush() {
     if (r.capped) {
       if (!cappedToday) {
         cappedToday = true;
-        await alert(
-          `⚠️ EURO TRADE — سقف كتابة الإشارات اليومي اتخطى.\n` +
-            `الدفعة (${batch.length} إشارة) اترفضت بالكامل والتسجيل واقف لحد بكرة.\n` +
-            `غيّر signal_write_budget.max_rows لو ده متوقع.`,
+        alert(
+          `سقف كتابة الإشارات اليومي اتخطى. الدفعة (${batch.length} إشارة) اترفضت بالكامل ` +
+            `والتسجيل واقف لحد بكرة. غيّر signal_write_budget.max_rows لو ده متوقع.`,
         );
       }
       return;
