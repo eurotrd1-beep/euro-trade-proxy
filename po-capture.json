@@ -1,0 +1,1235 @@
+{
+  "capturedAt": "2026-07-01T02:24:35.382Z",
+  "wsUrl": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+  "cookie": "",
+  "authFrames": [
+    {
+      "url": "wss://events-po.com/socket.io/?EIO=4&transport=websocket",
+      "frame": "42[\"auth\",{\"sessionToken\":\"dcc4334c5b5724cc995545b696f59f13\",\"uid\":\"135834819\",\"lang\":\"en\",\"currentUrl\":\"cabinet\",\"isChart\":1}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "frame": "42[\"auth\",{\"session\":\"a:4:{s:10:\\\"session_id\\\";s:32:\\\"36d4d31adc57b533291c3c9d70d46843\\\";s:10:\\\"ip_address\\\";s:13:\\\"41.235.169.67\\\";s:10:\\\"user_agent\\\";s:111:\\\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36\\\";s:13:\\\"last_activity\\\";i:1782872649;}6b451d6280dceeb988d7fa23e43318ff\",\"isDemo\":0,\"uid\":135834819,\"platform\":2,\"isFastHistory\":true,\"isOptimized\":true}]"
+    }
+  ],
+  "handshakes": [],
+  "loginPosts": [
+    {
+      "url": "https://www.google.com/ccm/collect?rcb=12&frm=0&ae=g&auid=357093469.1782872621&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&en=page_view&dl=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&scrsrc=pocketoption.com&rnd=1151141428.1782872621&navt=n&npa=0&ep.ads_data_redaction=0&gtm=45E92e66t1v9136974166za204zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=0~115938466~115938468~119027224~119318177&apve=1&apvf=f&gap.gtb=1&apvc=1&tft=1782872621406&tfd=2126&fmt=8",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/ccm/collect?rcb=14&frm=0&auid=357093469.1782872621&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&en=page_view&dl=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&scrsrc=pocketoption.com&rnd=1151141428.1782872621&navt=n&npa=0&gtm=45c92e66t1v9166137158z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938466~115938469~119027224~119318177~119348851~119576881~119576885~119576891~119576895&apve=1&apvf=f&gap.gtb=1&apvc=0&tids=DC-13612124&tid=DC-13612124&tft=1782872621993&tfd=2713&fmt=8",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics-ipv6.tiktokw.us/ipv6/enrich_ipv6",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EnrichIpv6\",\"event_id\":\"\",\"message_id\":\"messageId-1782872622796-2910789003312-D54NB53C77U5DJL508B0#source=2\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:42.796Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622789::NkU0wXvcta"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"LandingPageView\",\"event_id\":\"\",\"message_id\":\"messageId-1782872622805-7752372796580-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:42.805Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622789::NkU0wXvctadUpx"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"Pageview\",\"event_id\":\"\",\"message_id\":\"messageId-1782872622796-2910789003312-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:42.796Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622789::NkU0wXvctadUpxvWYcOY\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"LandingPageView\",\"event_id\":\"\",\"message_id\":\"messageId-1782872622816-5371673495300-CPC6SBRC77U2IO5KPOI0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:42.816Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"CPC6SBRC77U2IO5KPOI0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-CPC6SBRC77U2IO5KPOI0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e086ab57-74f3-11f1-ad55-020017016128-CPC6SBRC77U2IO5KPOI0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622792::x4ZVoYdF62esla"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"Pageview\",\"event_id\":\"\",\"message_id\":\"messageId-1782872622812-1887124708758-CPC6SBRC77U2IO5KPOI0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:42.812Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"CPC6SBRC77U2IO5KPOI0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-CPC6SBRC77U2IO5KPOI0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e086ab57-74f3-11f1-ad55-020017016128-CPC6SBRC77U2IO5KPOI0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622792::x4ZVoYdF62eslaSu_PpD\""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/g/measurement/conversion?random=1782872622944&cv=11&tid=G-8D1Z2CLK9Z&fst=1782872622944&fmt=8&en=session_start&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&gacid=284671358.1782872623&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&rcb=7",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/login/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166&_p=1782872619865&_gaz=1&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EAAAAGAC&_prs=ok&_uip=%3A%3A&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=7&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=1&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119576881~119576885~119576891~119576895&dl=https%3A%2F%2Fpocketoption.com%2Flogin%2F&sid=1782872622&sct=1&seg=0&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&en=page_view&_fv=1&_nsi=1&_ss=2&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.pageview_id=1782872619576206&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&tfd=3704",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/login/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/11297525598/?random=1782872622988&cv=11&fst=1782872622988&fmt=8&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dgtag.config%3Blang%3Den%3Bdomain%3Dpocketoption.com%3Bplatform%3Dp_2%3Bapp_ver%3Dv_not_found%3Bis_webview%3Dno%3Bpageview_id%3D1782872619576206%3Bpo_uuid%3Dcdaac622-a3d5-4dc4-9911-44973783025a&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16699499567/?random=1782872623013&cv=11&fst=1782872623013&fmt=8&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dgtag.config%3Blang%3Den%3Bdomain%3Dpocketoption.com%3Bplatform%3Dp_2%3Bapp_ver%3Dv_not_found%3Bis_webview%3Dno%3Bpageview_id%3D1782872619576206%3Bpo_uuid%3Dcdaac622-a3d5-4dc4-9911-44973783025a&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166&_p=1782872619865&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EAAAAGQC&_uip=%3A%3A&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=7&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=2&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&dl=https%3A%2F%2Fpocketoption.com%2Flogin%2F&sid=1782872622&sct=1&seg=0&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&_tu=CA&en=activity_start&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.pageview_id=1782872619576206&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&ep.hit_timestamp=%D0%94%D0%B0%D1%82%D0%B0%3A%201.07.2026%20%7C%20%D0%92%D1%80%D0%B5%D0%BC%D1%8F%3A%2005%3A23%3A41%20%7C%20UTC%20%2B03%3A00&epn.hts_last_activity=1782872621&_et=52&up.cid_ga=.&up.cid_ym=false&tfd=3761",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/login/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/ccm/collect?rcb=7&frm=0&auid=357093469.1782872621&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&en=page_view&dl=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&scrsrc=pocketoption.com&rnd=1151141428.1782872621&navt=n&npa=0&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.pageview_id=1782872619576206&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&apve=1&apvf=f&gap.gtb=2&apvc=0&tids=AW-11297525598~AW-16699499567&tid=AW-11297525598&tft=1782872623044&tfd=3764&fmt=8",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872623063-5078433260829\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:43.063Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"1\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e\",\"variation_id\":\"traffic_2,traffic_3::default\",\"userAgent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    },
+    {
+      "url": "https://ad.doubleclick.net/activity;src=13612124;type=pageview;cat=po-we0;rcb=14;ord=6931713648091;match_id=284671358.1782872623;npa=0;auiddc=357093469.1782872621;u27=284671358.1782872623;uaa=;uab=;uafvl=;uamb=0;uam=;uap=;uapv=;uaw=0;pscdl=noapi;frm=0;_tu=KFA;gtm=45c92e66t1v9166137158z89136974166za20kzb9136974166zd9136974166xea;gcd=13l3l3l3l1l1;dma=0;dc_fmt=3;tag_exp=115616985~115938466~115938469~119027224~119318177~119348851~119576881~119576885~119576891~119576895;epver=2;gap.gtb=2;dc_random=1782872623_kfCawWzjRcxVuiIY-ha8Gr4dbWi1wB-6bQ;~oref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F?",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16583710471/?random=1103904609&cv=11&fst=1782872624060&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9192670615z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938466~115938468~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=11&label=V0GHCOmR0csZEIeu3eM9&capi=1&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&ec_mode=a&_tu=CA&gcl_ctr=1~0~0~0&gap.gtb=2&category=acrcp_v1_512&emd=tvd.1&eme=tv.1~&ept=5&ct_cookie_present=false&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKFHRyaWdnZXI7ZXZlbnQtc291cmNlWgMKAQFiAwoBAw&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5tx3BTthpfd4ODvJehdkmxqYpTmlATXJmAA&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc356d1dhrhiTEbzg0Xdt8_i6VeZUreoEQ6por91D3n1MinHJW9-wOY5caAiIQ&pscrd=IhMIkL7Ii7awlQMVEUD2CB3_SzImOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNTy1wMm1CR0xQWEFSQTZQZE5VT19heEV0bVZ6NkNGQ1A3WXFfNm1pUTVEV1owWksyQXBpVGZaegwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16682897121/?random=858307451&cv=11&fst=1782872624362&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9212482735z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118395333~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=16&label=gMP7CKPa0s0ZEOGdg5M-&capi=1&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&ec_mode=a&_tu=CA&gcl_ctr=2~0~0~0&gap.gtb=2&category=acrcp_v1_512&emd=tvd.1&eme=tv.1~&ept=5&ct_cookie_present=false&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKHnRyaWdnZXIsIG5vdC1uYXZpZ2F0aW9uLXNvdXJjZVoDCgEBYgMKAQM&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5t3nlQjqjmVgZQyDa7lRFLDWGP3mN7Su0og&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc355VeEhbLbcD7F6Rqup6Irxk0FuqEDw8-oPfzSAkGfWo1NrgsOe8j9caAuWF&pscrd=IhMI1pfTi7awlQMVMnX2CB3OVxbDOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNTlBMSk9NVUZueEhjZGhEeWtmWjFRUWx6dVpNbmpKWVZNSVpZcEYzcXVRcVJ5N0RCbnA3YWJEegwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16772771426/?random=1250120265&cv=11&fst=1782872624707&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9215806734z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938466~115938468~118897921~118897931~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=5&label=fq4ACNqp6ucZEOLc8L0-&capi=1&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&ec_mode=a&_tu=CA&gcl_ctr=3~0~0~0&gap.gtb=2&category=acrcp_v1_512&emd=tvd.1&eme=tv.1~&ept=5&ct_cookie_present=false&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKGXRyaWdnZXI7bmF2aWdhdGlvbi1zb3VyY2VaAwoBAWIDCgED&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5t4EV1iSwbM2w6Nf9Q8RPrQlYBRrIjtw5EQ&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc355qI4GKkaYAVRWtGWR36q_6lFg-hdJec13HiMaBw9pRBqMJnjed7FAaAgVl&pscrd=IhMIqJjni7awlQMV_Ff2CB1yjDGcOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNTVlhQklQMXlxYVFudFZ4TDJZZnBXRVBQVV8yMC1LT1JXMk9sRnBTYTVkM3E4MG42VmJCRTl0egwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EngagedSession\",\"event_id\":\"\",\"message_id\":\"messageId-1782872632813-6310998416075-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:52.813Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"2\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622789::NkU0wXvctadUpxv"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EngagedSession\",\"event_id\":\"\",\"message_id\":\"messageId-1782872632820-6942705869469-CPC6SBRC77U2IO5KPOI0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:23:52.820Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"CPC6SBRC77U2IO5KPOI0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"2\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-CPC6SBRC77U2IO5KPOI0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e086ab57-74f3-11f1-ad55-020017016128-CPC6SBRC77U2IO5KPOI0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\"1782872622792::x4ZVoYdF62eslaS"
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/11297525598/?random=1782872643049&cv=11&fst=1782872643049&fmt=8&bg=ffffff&guid=ON&async=1&en=form_start&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_start&gap.fsrc=1&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16699499567/?random=1782872643068&cv=11&fst=1782872643068&fmt=8&bg=ffffff&guid=ON&async=1&en=form_start&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_start&gap.fsrc=1&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166&_p=1782872619865&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EEEAAGQC&_uip=%3A%3A&ae=a&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=7&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=3&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&dl=https%3A%2F%2Fpocketoption.com%2Flogin%2F&sid=1782872622&sct=1&seg=1&dt=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&en=form_start&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.pageview_id=1782872619576206&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&ep.form_id=&ep.form_destination=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&epn.form_length=7&ep.first_field_id=email&ep.first_field_name=email&ep.first_field_type=email&epn.first_field_position=1&_et=20043&tfd=23808",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/login/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16583710471/?random=1782872643106&cv=11&fst=1782872643106&fmt=8&bg=ffffff&guid=ON&async=1&en=form_start&gtm=45892e66t1v9192670615za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938466~115938468~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=11&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_start&gap.fsrc=1&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16682897121/?random=1782872643137&cv=11&fst=1782872643137&fmt=8&bg=ffffff&guid=ON&async=1&en=form_start&gtm=45892e66t1v9212482735za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118395333~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=16&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_start&gap.fsrc=1&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16772771426/?random=1782872643166&cv=11&fst=1782872643166&fmt=8&bg=ffffff&guid=ON&async=1&en=form_start&gtm=45892e66t1v9215806734za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938466~115938468~118897921~118897931~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=5&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_start&gap.fsrc=1&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics-ipv6.tiktokw.us/ipv6/enrich_ipv6",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EnrichIpv6\",\"event_id\":\"\",\"message_id\":\"messageId-1782872648821-8797529360810-D54NB53C77U5DJL508B0#source=2\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:08.821Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"auto_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"2\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EnrichAM\",\"event_id\":\"\",\"message_id\":\"messageId-1782872648821-8797529360810-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:08.821Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"auto_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"2\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e-D54NB53C77U5DJL508B0\",\"variation"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872648829-8460182437043\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:08.829Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"auto_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/login/\",\"referrer\":\"\",\"load_progress\":\"2\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-WAYtA.0.0::e08635ea-74f3-11f1-9f09-865be8929a9e\",\"variation_id\":\"traffic_2,traffic_3::def"
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/11297525598/?random=1782872648844&cv=11&fst=1782872648844&fmt=8&bg=ffffff&guid=ON&async=1&en=form_submit&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_submit&gap.fsrc=2&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16699499567/?random=1782872648860&cv=11&fst=1782872648860&fmt=8&bg=ffffff&guid=ON&async=1&en=form_submit&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_submit&gap.fsrc=2&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16583710471/?random=1782872648881&cv=11&fst=1782872648881&fmt=8&bg=ffffff&guid=ON&async=1&en=form_submit&gtm=45892e66t1v9192670615za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938466~115938468~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=11&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_submit&gap.fsrc=2&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16682897121/?random=1782872648903&cv=11&fst=1782872648903&fmt=8&bg=ffffff&guid=ON&async=1&en=form_submit&gtm=45892e66t1v9212482735za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616986~115938466~115938468~118395333~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=16&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_submit&gap.fsrc=2&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16772771426/?random=1782872648925&cv=11&fst=1782872648925&fmt=8&bg=ffffff&guid=ON&async=1&en=form_submit&gtm=45892e66t1v9215806734za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938466~115938468~118897921~118897931~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=5&frm=0&tiba=Login%20to%20Your%20Account%20%7C%20Pocket%20Option&ae=a&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dform_submit&gap.fsrc=2&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://tr.snapchat.com/p",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"ctx\":{\"bt\":\"1d53c387\",\"c1\":\"5d9e45c7-75c2-43a9-afcb-490773879943\",\"lc\":\"376bd0cc-4aa2-4283-a069-ae103b98a5b4\",\"ls\":\"18371d36-15f0-478d-91cc-a17ebb5a811f\",\"r\":\"1f56249a-49ac-4fd3-aa0b-dc7fa23d5c69\",\"si\":\"nD5dnkXHdcKnqSXLSQdzh5lDGRVtcgvndQsYNx02FfCPjRjMoX67WoEf1L414asVdk6L8dL6KMV6ecl0QqzGp3NRR3j6pb7qlqI3a9DMSqKAg8RprhA7mKW08-L4d9DHelgfViSaSazd02AL3H-iPVxp291MRTk8\",\"ss\":\"8bf1d2fa-28c5-4679-9a74-42acc6a77351\",\"bg\":false,\"df\":true,\"mtp\":0,\"sh\":864,\"sw\":1536,\"ua\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36\",\"url\":\"https://pocketoption.com/en/login/\",\"v\":\"3.59.0-2606221835\",\"a\":[9,11,18,19,1],\"p\":[779,1226,1148,5466,2731],\"pv\":2,\"rd\":29718,\"sa\":1782872622011,\"sps\":26987,\"ts\":1782872648998,\"d_bvs\":\"\",\"huah\":true},\"req\":[{\"md\":{"
+    },
+    {
+      "url": "https://pocketoption.com/en/login/",
+      "headers": {
+        "Referer": "https://pocketoption.com/en/login/",
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "multipart/form-data; boundary=----WebKitFormBoundaryhoDLAgn40dZ9GIQI",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+      },
+      "postData": "------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"submitLogin\"\r\n\r\n1\r\n------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"email\"\r\n\r\nelmohtarfjoo@gmail.com\r\n------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nyou89056\r\n------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"g-recaptcha-response\"\r\n\r\n\r\n------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"register_page\"\r\n\r\n42661500553291\r\n------WebKitFormBoundaryhoDLAgn40dZ9GIQI\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\n0cAFcWeA7GfcJFJ4IcfWP1w2t1M9Nbki8VsEce2Qod0zzlciQkHeOZwKH77QAxZOiRQzj8VNcg5fZ98clRp-xti7wpJBE8_UU1fUEy7Mkd6_3s27uYc2mr5dfjJC-NMxhsYNpUnkZfGRVG6kLnSdDoO3UVvGvIeLUzqxBdocKYnrV"
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166&_p=1782872655457&em=tv.1~em.989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EAAACGQC&_uip=%3A%3A&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=12&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=1&tag_exp=115938465~115938468~118897920~118897930~119027224~119576881~119576885~119576891~119576895&uid=135834819&dl=https%3A%2F%2Fpocketoption.com%2Fcabinet%2F&sid=1782872622&sct=1&seg=1&dr=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&dt=The%20Most%20Innovative%20Trading%20Platform&en=page_view&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.fbp=fb.1.1782872622439.611522887781749597&ep.pageview_id=1782872650229548&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&tfd=5487",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/cabinet/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/11297525598/?random=1782872655722&cv=11&fst=1782872655722&fmt=8&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938465~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fcabinet%2F&ref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Fcabinet%2F&rcb=12&frm=0&tiba=The%20Most%20Innovative%20Trading%20Platform&userId=135834819&ga_uid=G-8D1Z2CLK9Z.135834819&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dgtag.config%3Blang%3Den%3Bdomain%3Dpocketoption.com%3Bplatform%3Dp_2%3Bapp_ver%3Dv_not_found%3Bis_webview%3Dno%3Bfbp%3Dfb.1.1782872622439.611522887781749597%3Bpageview_id%3D1782872650229548%3Bpo_uuid%3Dcdaac622-a3d5-4dc4-9911-44973783025a&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://www.google.com/rmkt/collect/16699499567/?random=1782872655748&cv=11&fst=1782872655748&fmt=8&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938465~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fcabinet%2F&ref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&top=https%3A%2F%2Fpocketoption.com%2Fen%2Fcabinet%2F&rcb=12&frm=0&tiba=The%20Most%20Innovative%20Trading%20Platform&userId=135834819&ga_uid=G-8D1Z2CLK9Z.135834819&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&data=event%3Dgtag.config%3Blang%3Den%3Bdomain%3Dpocketoption.com%3Bplatform%3Dp_2%3Bapp_ver%3Dv_not_found%3Bis_webview%3Dno%3Bfbp%3Dfb.1.1782872622439.611522887781749597%3Bpageview_id%3D1782872650229548%3Bpo_uuid%3Dcdaac622-a3d5-4dc4-9911-44973783025a&gap.gtb=2&ept=68&gcp=5",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130za20kzb9136974166zd9136974166&_p=1782872655457&em=tv.1~em.989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EEAAAGQC&_uip=%3A%3A&ae=a&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=12&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=2&tag_exp=115938465~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&uid=135834819&dl=https%3A%2F%2Fpocketoption.com%2Fcabinet%2F&sid=1782872622&sct=1&seg=1&dr=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&dt=The%20Most%20Innovative%20Trading%20Platform&_tu=KA&en=scroll&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.fbp=fb.1.1782872622439.611522887781749597&ep.pageview_id=1782872650229548&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&epn.percent_scrolled=90&_et=164&tfd=5654",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/cabinet/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"Pageview\",\"event_id\":\"\",\"message_id\":\"messageId-1782872656182-8335152349945-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:16.182Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"0\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-D54NB53C77U5DJL508B0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-E8yqG.1.0::f4b4037a-74f3-11f1-bd7b-02001729d1d4-D54NB53C77U5DJL508B0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"Pageview\",\"event_id\":\"\",\"message_id\":\"messageId-1782872656184-1342216447216-CPC6SBRC77U2IO5KPOI0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:16.184Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\"},\"pixel\":{\"code\":\"CPC6SBRC77U2IO5KPOI0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"0\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-CPC6SBRC77U2IO5KPOI0\",\"pageview_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e-E8yqG.1.0::f4b2b775-74f3-11f1-87a0-02001716780e-CPC6SBRC77U2IO5KPOI0\",\"variation_id\":\"traffic_2,traffic_3::default\",\"csid\":\""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16583710471/?random=1825456677&cv=11&fst=1782872655935&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9192670615z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938465~115938468~118395334~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Fcabinet%2F&ref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=7&label=V0GHCOmR0csZEIeu3eM9&capi=1&frm=0&tiba=The%20Most%20Innovative%20Trading%20Platform&ga_uid=G-8D1Z2CLK9Z.135834819&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&oidsrc=3&ecsid=1015943875.1782872643&_tu=CBA&gcl_ctr=4~0~0~0&gap.gtb=2&aecs=1&category=acrcp_v1_512&ept=5&ct_cookie_present=false&eoid=CkQKEAjw0o3SBhCpuqbL6eCV_3oSMAASEFt1xxi00XfSvCgp4_ZNHer4fjES9VvqJSw87zSYdZgBsBG6WHnzCA2TLe88c_D_BwE&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKK3RyaWdnZXI7bmF2aWdhdGlvbi1zb3VyY2UsIG5vdC1ldmVudC1zb3VyY2VaAwoBAWIDCgED&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5t3RecGK9UHhwW6xZTJIuKg1joOASm_ns3Q&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc356pJHKn0J7Frfm9aKMex6Z-Qj3ppgDqG4gmHPWxFEQChOPVqI8eaPgaAuSS&pscrd=IhMI1uvXmrawlQMVol72CB28ZwZPOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNUHdJY3kzV2hIOTZaa3RYYm9lOUJ6bF9WeTNoU1czc2xlV2p2VGdDVkR4OG1UbEdlRWtrdkxRegwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16682897121/?random=1931607857&cv=11&fst=1782872655981&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9212482735z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938465~115938468~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Fcabinet%2F&ref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=13&label=gMP7CKPa0s0ZEOGdg5M-&capi=1&frm=0&tiba=The%20Most%20Innovative%20Trading%20Platform&ga_uid=G-8D1Z2CLK9Z.135834819&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&oidsrc=3&ecsid=1015943875.1782872643&_tu=CBA&gcl_ctr=5~0~0~0&gap.gtb=2&aecs=1&category=acrcp_v1_512&ept=5&ct_cookie_present=false&eoid=CkMKEAjw0o3SBhCpuqbL6eCV_3oSLwASEFt1hI0a-hMO_hbVBTVKCptKpLFyd-EQq7Y4rVPjBIq6-YCogNia-rd6ZP_W8P8HAQ&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKJnRyaWdnZXI7ZXZlbnQtc291cmNlO25hdmlnYXRpb24tc291cmNlWgMKAQFiAwoBAw&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5t01Z8E56GBsG8tUA_0TEEKoA8Sk1dpBhow&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc354VACtt9nkCAwaxS_8_ffZ3HUpZw9AVkhJrOaN4TzEWT2ox74Hf_mIaAvIS&pscrd=IhMI8r_amrawlQMVeQAUBh0xgwpvOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNT0JLaUlvZzV2OE50dk9mdEtRdjkwVkFrbGh0WGxGcFBVMy1pRFd3aDZLbFQ0UDgxQVI4QVRmegwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/16772771426/?random=880408101&cv=11&fst=1782872656030&fmt=8&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45892e66t1v9215806734z89136974166za20kzb9136974166zd9136974166xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=115616985~115938465~115938468~118897921~118897931~119027224~119318177~119576881~119576885~119576891~119576895&u_w=1536&u_h=864&url=https%3A%2F%2Fpocketoption.com%2Fen%2Fcabinet%2F&ref=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&rcb=17&label=fq4ACNqp6ucZEOLc8L0-&capi=1&frm=0&tiba=The%20Most%20Innovative%20Trading%20Platform&ga_uid=G-8D1Z2CLK9Z.135834819&value=0&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=357093469.1782872621&uaa=&uab=&uafvl=&uamb=0&uam=&uap=&uapv=&uaw=0&oidsrc=3&ecsid=1015943875.1782872643&_tu=CBA&gcl_ctr=6~0~0~0&gap.gtb=2&aecs=1&category=acrcp_v1_512&ept=5&ct_cookie_present=false&eoid=CkQKEAjw0o3SBhCpuqbL6eCV_3oSMAASEFt1aNvaWwlkwNGxI0VdjFsjcMimEs-qdS-XLbr7tG85cXMRqmdgxB3YZMSjMvD_BwE&crd=CLTesQII8t-xAgit4bECCK_hsQIIobixAgixwbECCLDBsQIIscOxAgiKxbECCMLJsQIItMaxAgiT2rECCNvcsQIIh9uxAgjTxbECCOvMsQII7c6xAgjVz7ECCPTasQII_eOxAgjL47ECCK7lsQIIyeOxAgiX1LECCMnbsQIIzeaxAgix4bECCLPhsQIIpt2xAgiw3rECCIDbsQJKFHRyaWdnZXI9ZXZlbnQtc291cmNlWgMKAQFiAwoBAw&cerd=CgEA&eitems=ChAI8NKN0gYQoPrLv5KK8bBNEh0An2R5t4TeVr5ouNzgEaRBlA0x7PtYm4HXTElbGg&fsk=ChEI8NKN0gYQtZjLifiYu6yfARIsAPnc355-x-YYa8zUmZ8Iri33DgEjp-WlRc7BdXi8tuLMYHxZ3J5Ps53VxR4aAla5&pscrd=IhMIy_XdmrawlQMVE1T2CB2fMiyQOhlodHRwczovL3BvY2tldG9wdGlvbi5jb20vQlhDaEVJOE5LTjBnWVEydFRQazl1NjNlNk5BUkl0QUg4bkJNT0hzYVBzSVJCSTBhNVNKN3gxdmUtTVM3c2lVNkZTQzMyVHg1Qk9lVTlFZ2RJWllwWHIwTE5pegwICWIICAAQABgAIAA",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EnrichAM\",\"event_id\":\"\",\"message_id\":\"messageId-1782872656213-7726290954326-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:16.213Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"0\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrjZ4Og-uRBO83-"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872656732-4403935005255\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:16.732Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"0\"},\"library\":{\"name\":\"pixel.js\",\"version\":\"2.2.1\"},\"session_id\":\"e0865bcf-74f3-11f1-9f09-865be8929a9e::DPN-VbTrj"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event\":\"EnrichAM\",\"event_id\":\"\",\"message_id\":\"messageId-1782872658216-8109197525408-D54NB53C77U5DJL508B0\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:18.216Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"1\"},\"library\":"
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872660004-9335146282261\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:20.004Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872661935-3783552042963\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:21.935Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872663958-7864205367376\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:23.958Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/inter",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872666179-9842612063883\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:26.179Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/act",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872668004-9049301977005\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:28.004Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    },
+    {
+      "url": "https://pocketoption.com/_gtm_gateway/ag/g/c?v=2&tid=G-8D1Z2CLK9Z&gtm=45g92e66t1v9137712130z89136974166za20kzb9136974166zd9136974166&_p=1782872655457&em=tv.1~em.989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45&gcd=13l3l3l3l1l1&npa=0&dma=0&ecid=272577516&_eu=EAAAAGQC&_uip=%3A%3A&are=1&cid=284671358.1782872623&ec_mode=c&fp=1&frm=0&ir=1&pscdl=noapi&rcb=12&sr=1536x864&uaa=&uab=&uafvl=&uam=&uamb=0&uap=&uapv=&uaw=0&ul=en-us&ur=EG-KFS&_gsid=tQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w&gaf=2&_s=3&tag_exp=115938465~115938468~118897920~118897930~119027224~119318177~119576881~119576885~119576891~119576895&uid=135834819&dl=https%3A%2F%2Fpocketoption.com%2Fcabinet%2F&sid=1782872622&sct=1&seg=1&dr=https%3A%2F%2Fpocketoption.com%2Fen%2Flogin%2F&dt=The%20Most%20Innovative%20Trading%20Platform&_tu=CA&en=traderoom_assets__crypto&gap.gtb=2&ep.lang=en&ep.domain=pocketoption.com&ep.platform=p_2&ep.app_ver=v_not_found&ep.is_webview=no&ep.fbp=fb.1.1782872622439.611522887781749597&ep.pageview_id=1782872650229548&ep.po_uuid=cdaac622-a3d5-4dc4-9911-44973783025a&ep.hit_timestamp=%D0%94%D0%B0%D1%82%D0%B0%3A%201.07.2026%20%7C%20%D0%92%D1%80%D0%B5%D0%BC%D1%8F%3A%2005%3A24%3A28%20%7C%20UTC%20%2B03%3A00&_et=12176&up.cid_ga=284671358.1782872623.&up.cid_ym=false&tfd=17842",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Referer": "https://pocketoption.com/en/cabinet/"
+      },
+      "postData": ""
+    },
+    {
+      "url": "https://analytics.tiktok.com/api/v2/pixel/inter",
+      "headers": {
+        "Referer": "https://pocketoption.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      "postData": "{\"event_id\":\"\",\"message_id\":\"messageId-1782872672564-1288317832722\",\"is_onsite\":false,\"timestamp\":\"2026-07-01T02:24:32.564Z\",\"context\":{\"ad\":{\"sdk_env\":\"external\",\"jsb_status\":2},\"device\":{\"platform\":\"pc\"},\"user\":{\"anonymous_id\":\"01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1\",\"eb_email\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"acp\":[{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_dl_hash_em\"},{\"type\":1,\"value\":\"989764a3ff0f8336b15a52197ea28b51bd61f61cf23ff57e67e4836bb8640e45\",\"source\":\"aam_ts_raw_em\"}]},\"pixel\":{\"code\":\"D54NB53C77U5DJL508B0\",\"runtime\":\"1\",\"codes\":\"D54NB53C77U5DJL508B0|CPC6SBRC77U2IO5KPOI0\"},\"page\":{\"url\":\"https://pocketoption.com/en/cabinet/\",\"referrer\":\"https://pocketoption.com/en/login/\",\"load_progress\":\"2\""
+    }
+  ],
+  "cookies": [
+    {
+      "name": "afUserId",
+      "value": "02df439b-054f-4b4f-a2f9-14b93753b88b-p",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432657.777933,
+      "size": 46,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.284671358.1782872623",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432655.820874,
+      "size": 29,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_sctr",
+      "value": "1%7C1782853200000",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817087024,
+      "size": 22,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.357093469.1782872621.1015943875.1782872643.1782872648",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1790648621,
+      "size": 64,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "ttcsid_CPC6SBRC77U2IO5KPOI0",
+      "value": "1782872622792::x4ZVoYdF62eslaSu_PpD.1.1782872668004.1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1816568668,
+      "size": 80,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "FPGSID",
+      "value": "1.1782872623.1782872623.G-E6RB4FHY15.961uHGDabVqcB57HV1MDng",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1782874424.600007,
+      "size": 65,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "sameSite": "Strict",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_fbp",
+      "value": "fb.1.1782872622439.611522887781749597",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1790648656,
+      "size": 41,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "po_uuid",
+      "value": "cdaac622-a3d5-4dc4-9911-44973783025a",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432619.755717,
+      "size": 43,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "qrator_ssid2",
+      "value": "v2.0.1782872619.549.29eba943lPdH27sX|p4MnCpo0gx0Puvnt|YUNE3vzJrWXETuOPP/hU3LbnwgDiYMqzoGB0TKQ1F2H3+GEjc8VG75sxO96lGyMDGCz5Y3F25Vc9CFk4+KMeCA==-uEBkerU+5GHYg/zOHS/Md1HUFIg=",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1782873619.756219,
+      "size": 183,
+      "httpOnly": true,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_ga_8D1Z2CLK9Z",
+      "value": "GS2.1.s1782872622$o1$g1$t1782872668$j14$l1$h272577516$dtQ_wdRfwqE1zTABHoHYvxj1GZq5tk8Wg_w",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432668.072299,
+      "size": 103,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_tt_enable_cookie",
+      "value": "1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1816568656,
+      "size": 18,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_scid",
+      "value": "nD5dnkXHdcKnqSXLSQdzh5lDGRVtcgvn",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817087022,
+      "size": 37,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "ci_session",
+      "value": "a%3A4%3A%7Bs%3A10%3A%22session_id%22%3Bs%3A32%3A%2236d4d31adc57b533291c3c9d70d46843%22%3Bs%3A10%3A%22ip_address%22%3Bs%3A13%3A%2241.235.169.67%22%3Bs%3A10%3A%22user_agent%22%3Bs%3A111%3A%22Mozilla%2F5.0%20%28Windows%20NT%2010.0%3B%20Win64%3B%20x64%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F150.0.0.0%20Safari%2F537.36%22%3Bs%3A13%3A%22last_activity%22%3Bi%3A1782872649%3B%7D6b451d6280dceeb988d7fa23e43318ff",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1783477450.225528,
+      "size": 443,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "AF_SYNC",
+      "value": "1782872623251",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1783477423,
+      "size": 20,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "ttcsid",
+      "value": "1782872622790::lmWSfe4Vc0U-1F_FKUWq.1.1782872668004.0::1.27444.33400::45205.6.243.213::45307.8.0",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1816568668,
+      "size": 102,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "zoom-width",
+      "value": "[[1%2C2%2C0.8333333]]",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1785464656,
+      "size": 31,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "FPID",
+      "value": "FPID2.2.tJSbgZ3eN77lPXChIC0RhnsKmHx9a5%2FCGZz3SD37Es8%3D.1782872623",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432656.476365,
+      "size": 71,
+      "httpOnly": true,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_ttp",
+      "value": "01KWDQTHNT78E3MJHTJ1Z186F0_.tt.1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1816568656,
+      "size": 36,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "mv2i",
+      "value": "1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1814408660.237727,
+      "size": 5,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "loggedIn",
+      "value": "1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1814408650.225633,
+      "size": 9,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "no-login-captcha",
+      "value": "1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432650.225673,
+      "size": 17,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "FPLC",
+      "value": "pMY5jjO3OgFizJIyI6hhOuMTkxTQYzAKLJeHPFVEnZ%2FntW8P32%2BphQpz%2BOxtRUmmSffl%2F1NmRbBoTstAIh4NhMSUD1L0Ql16uNBQxu4VLTIW%2F0amLfXMPhFvpqwKAw%3D%3D",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1782944624.599924,
+      "size": 146,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "pageview_id",
+      "value": "1782872650229548",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1814408650.932932,
+      "size": 27,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_ga_E6RB4FHY15",
+      "value": "GS2.1.s1782872623$o1$g1$t1782872655$j28$l0$h127347183$dcHOmu3oXTomkyY4eQCvwoUAMHgkFyb9PDw",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432655.91555,
+      "size": 103,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "lang",
+      "value": "en",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432660.237514,
+      "size": 6,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "_scid_r",
+      "value": "nD5dnkXHdcKnqSXLSQdzh5lDGRVtcgvn",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817087022,
+      "size": 39,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax",
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "hutlm12",
+      "value": "1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1783893599.946332,
+      "size": 8,
+      "httpOnly": false,
+      "secure": true,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "ttcsid_D54NB53C77U5DJL508B0",
+      "value": "1782872622789::NkU0wXvctadUpxvWYcOY.1.1782872668004.1",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1816568668,
+      "size": 80,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    },
+    {
+      "name": "is_pwa",
+      "value": "0",
+      "domain": ".pocketoption.com",
+      "path": "/",
+      "expires": 1817432656.985286,
+      "size": 7,
+      "httpOnly": false,
+      "secure": false,
+      "session": false,
+      "priority": "Medium",
+      "sourceScheme": "Secure"
+    }
+  ],
+  "recvSamples": [
+    {
+      "url": "wss://chat-po.site/cabinet-client/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "42[\"chat_room_list\",{\"list\":[{\"id\":224730975,\"type\":4,\"message_id\":601754152,\"message\":\"📈\",\"message_hidden\":0,\"message_secret\":false,\"message_content\":{\"signal\":{\"symbol\":\"UKBrent_otc\",\"type\":\"commodity\",\"label\":\"Brent Oil OTC\",\"price\":76.938,\"forecast\":\"UP2\",\"timeframe\":\"M10\"}},\"date\":1782872640,\"new\":49649,\"notify\":1,\"hidden\":0,\"pinned\":0,\"mention\":false,\"tab\":\"notifications\",\"title\":\"Signals\",\"avatar\":\"690/912/742/7b31340061c723e841d941401f6308ca.png?v=1778072903502\"},{\"id\":14906,\"type\":2,\"message_id\":601754101,\"message\":\"Can you guys help to trade\",\"message_hidden\":0,\"message_secret\":fals"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateAssets\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[5,\"#AAPL\",\"Apple\",\"stock\",2,50,60,30,3,0,170,0,[],1782923700,false,[{\"time\":60},{\"time\":120},{\"time\":180},{\"time\":300},{\"time\":600},{\"time\":900},{\"time\":1800},{\"time\":2700},{\"time\":3600},{\"time\":7200},{\"time\":10800},{\"time\":14400}],-1,60,1782923700],[170,\"#AAPL_otc\",\"Apple OTC\",\"stock\",3,73,60,30,3,1,0,5,[],1782950400,true,[{\"time\":60},{\"time\":120},{\"time\":180},{\"time\":300},{\"time\":600},{\"time\":900},{\"time\":1800},{\"time\":2700},{\"time\":3600},{\"time\":7200},{\"time\":10800},{\"time\":14400}],0,3,-1],[140,\"#AXP\",\"American Express\",\"stock\",3,50,60,30,3,0,291,0,[],1782923700,false,[{\"time\":60},{\"time\""
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateHistoryNewFast\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "{\"asset\":\"GBPJPY\",\"period\":60,\"history\":[[1782878977.087,215.325],[1782878977.347,215.324],[1782878978.113,215.324],[1782878978.59,215.321],[1782878978.861,215.319],[1782878979.187,215.319],[1782878979.601,215.32],[1782878979.917,215.321],[1782878980.148,215.322],[1782878981.582,215.318],[1782878981.988,215.321],[1782878982.188,215.321],[1782878982.353,215.321],[1782878982.77,215.319],[1782878983.283,215.317],[1782878983.493,215.315],[1782878983.782,215.315],[1782878984.425,215.316],[1782878984.758,215.317],[1782878985.189,215.317],[1782878985.371,215.316],[1782878986.13,215.316],[1782878986.5"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879858.36,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879858.486,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879858.793,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879859.559,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879860.16,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879860.782,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879861.345,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879862.467,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879862.824,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879863.16,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879863.432,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879863.791,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879864.36,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879865.559,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879866.159,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879866.958,215.377]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879867.307,215.376]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879868.561,215.376]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879869.081,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879869.317,215.376]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879869.895,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879870.361,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879870.38,215.376]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879871.509,215.375]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879872.057,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879873.361,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": true,
+      "d": "[[\"GBPJPY\",1782879874.562,215.374]]"
+    },
+    {
+      "url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+      "binary": false,
+      "d": "451-[\"updateStream\",{\"_placeholder\":true,\"num\":0}]"
+    }
+  ],
+  "allWsUrls": {
+    "33268.315": "wss://chat-po.site/cabinet-client/socket.io/?EIO=4&transport=websocket",
+    "33268.318": "wss://events-po.com/socket.io/?EIO=4&transport=websocket",
+    "33268.329": "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
+    "33268.330": "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
+    "33268.331": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket",
+    "33268.332": "wss://api-us-south.po.market/socket.io/?EIO=4&transport=websocket",
+    "33268.333": "wss://api-us-north.po.market/socket.io/?EIO=4&transport=websocket"
+  }
+}

@@ -499,7 +499,13 @@ async function start() {
     return;
   }
 
-  log(`بيشتغل على ${TIMEFRAME} · إحماء ${WARMUP} شمعة · انتهاء ${EXPIRY_SECONDS}s`);
+  // Which engine build is actually running. This file is a compiled copy, so
+  // when the numbers look wrong the first question is always whether it is the
+  // current one — and the answer belongs in the log, not in a guess.
+  log(
+    `بيشتغل على ${TIMEFRAME} · إحماء ${WARMUP} شمعة · انتهاء ${EXPIRY_SECONDS}s · ` +
+      `بصمة المحرك ${(engine.BUNDLE_SOURCE_HASH || 'غير معروفة').slice(0, 16)}…`,
+  );
   await refreshVersions();
   await recoverPending();
 

@@ -1,5 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
+// engine-source-sha256: 4007f96f65149fc3343d3b35c1e1f0e2ce8f04dbb68858d6e718d9c4ca070cb9
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -3542,3 +3543,6 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   vwap,
   williamsR
 });
+
+module.exports.BUNDLE_SOURCE_HASH = "4007f96f65149fc3343d3b35c1e1f0e2ce8f04dbb68858d6e718d9c4ca070cb9";
+
