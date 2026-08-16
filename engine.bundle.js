@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 4007f96f65149fc3343d3b35c1e1f0e2ce8f04dbb68858d6e718d9c4ca070cb9
+// engine-source-sha256: 96507b39ce17bdb533977ddd04e48e8c9862e5a8dd5192baf252e262dca1353b
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -24,6 +24,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // packages/engine/src/index.ts
 var src_exports = {};
 __export(src_exports, {
+  CONFIDENCE_SATURATION_SCORE: () => CONFIDENCE_SATURATION_SCORE,
   DEFAULT_PYRAMID: () => DEFAULT_PYRAMID,
   DEFAULT_STRATEGY_CONFIG: () => DEFAULT_STRATEGY_CONFIG,
   VOLUME_DEAD: () => VOLUME_DEAD,
@@ -38,7 +39,10 @@ __export(src_exports, {
   atr: () => atr,
   avgBodySize: () => avgBodySize,
   bollingerBands: () => bollingerBands,
+  buildCalibration: () => buildCalibration,
   cacheKey: () => cacheKey,
+  calibrationFor: () => calibrationFor,
+  calibrationFromJson: () => calibrationFromJson,
   candlePatterns: () => candlePatterns,
   canonicalName: () => canonicalName,
   categoryForIndicator: () => categoryForIndicator,
@@ -48,12 +52,16 @@ __export(src_exports, {
   cmf: () => cmf,
   computeIndicator: () => computeIndicator,
   confidenceFor: () => confidenceFor,
+  contiguousRuns: () => contiguousRuns,
+  correlationOf: () => correlationOf,
+  coversSignature: () => coversSignature,
   effectiveMaxScore: () => effectiveMaxScore,
   ema: () => ema,
   evaluateRules: () => evaluateRules,
   evaluateStrategyPro: () => evaluateStrategyPro,
   fullMacd: () => fullMacd,
   guaranteedWinExit: () => guaranteedWinExit,
+  hasCalibration: () => hasCalibration,
   indicatorFor: () => indicatorFor,
   isRegistered: () => isRegistered,
   liquidityZones: () => liquidityZones,
@@ -62,6 +70,8 @@ __export(src_exports, {
   mfi: () => mfi,
   obv: () => obv,
   outcomeFor: () => outcomeFor,
+  pairKey: () => pairKey,
+  primaryRulesOf: () => primaryRulesOf,
   pyramidFromJson: () => pyramidFromJson,
   registeredNames: () => registeredNames,
   registeredNamesInOrder: () => registeredNamesInOrder,
@@ -70,8 +80,10 @@ __export(src_exports, {
   rsi: () => rsi,
   rsiDivergence: () => rsiDivergence,
   ruleFromJson: () => ruleFromJson,
+  ruleSignature: () => ruleSignature,
   scoreStandard: () => scoreStandard,
   scoreV2: () => scoreV2,
+  setCalibration: () => setCalibration,
   sma: () => sma,
   stochastic: () => stochastic,
   strategyConfigFromJson: () => strategyConfigFromJson,
@@ -2804,18 +2816,7 @@ register("sr_bounce", ({ candles, currentPrice, rule }) => {
   return "none";
 });
 
-// packages/engine/src/strategy.ts
-var DEFAULT_PYRAMID = {
-  minPrimaryScore: 3,
-  confirmationRatio: 0.5,
-  requireAllFilters: true,
-  waitMessage: "\u0627\u0644\u0647\u0631\u0645 \u0644\u0645 \u064A\u0643\u062A\u0645\u0644 \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0642\u0627\u062F\u0645\u0629"
-};
-function effectiveMaxScore(strategy) {
-  if (strategy.maxScore > 0) return strategy.maxScore;
-  const sum = strategy.rules.filter((r) => r.enabled).reduce((s, r) => s + Math.abs(r.score), 0);
-  return sum > 0 ? sum : 1;
-}
+// packages/engine/src/pyramid/conditions.ts
 function checkCondition(rule, raw) {
   if (typeof raw === "string") {
     const target = rule.pattern ?? (rule.value != null ? String(rule.value) : "");
@@ -2825,7 +2826,7 @@ function checkCondition(rule, raw) {
       case "neq":
         return raw !== target;
       case "bullish":
-        return raw.includes("bullish") || raw.includes("hammer") || raw.includes("morning") || raw.includes("soldiers") || raw.includes("pin_bar_b");
+        return raw.includes("bullish") || raw.includes("hammer") || raw.includes("morning") || raw.includes("soldiers") || raw.includes("pin_bar_bull");
       case "bearish":
         return raw.includes("bearish") || raw.includes("shooting") || raw.includes("evening") || raw.includes("crows") || raw.includes("pin_bar_bear");
       default:
@@ -2996,20 +2997,182 @@ function categoryForIndicator(rule) {
   if (OSCILLATORS.has(ind) || ind.startsWith("stoch")) return "Oscillators";
   return "Other";
 }
-function consensusMultiplier(count) {
-  if (count <= 1) return 1;
-  if (count === 2) return 1.15;
-  if (count === 3) return 1.3;
-  return 1.5;
+
+// packages/engine/src/pyramid/constants.ts
+var CORRELATION_HIGH_THRESHOLD = 0.7;
+var MIN_CALIBRATION_SAMPLES = 200;
+var CONSENSUS_LADDER = [1, 1.15, 1.3, 1.5];
+var INDEP_REFERENCE = 4;
+var CONFIRMATION_FLOOR = 0;
+var CONFIRMATION_CEILING = 1;
+var PRIMARY_STRENGTH_MIN = 0.3;
+var PRIMARY_STRENGTH_MAX = 0.8;
+var MIN_SIGNAL_SEPARATION = 0.3333;
+var RELIEF_WEIGHTS = {
+  strength: 0.5,
+  independence: 0.3,
+  separation: 0.2
+};
+var QUALITY_WEIGHTS = {
+  primaryStrength: 0.25,
+  consensus: 0.2,
+  confirmation: 0.25,
+  separation: 0.2,
+  conflict: 0.1
+};
+
+// packages/engine/src/pyramid/correlation.ts
+function ruleSignature(r) {
+  const target = r.pattern ?? (r.value != null ? String(r.value) : "");
+  return [
+    r.indicator,
+    r.period,
+    r.fast,
+    r.slow,
+    r.smooth,
+    r.stddev,
+    r.tolerance,
+    r.condition,
+    target,
+    r.valueMin,
+    r.valueMax
+  ].join(":");
 }
-var MIN_GAP = 4;
-function dartDouble(v) {
-  return Number.isInteger(v) ? `${v}.0` : `${v}`;
+function pairKey(a, b) {
+  return a < b ? `${a}||${b}` : `${b}||${a}`;
+}
+var active = null;
+function setCalibration(c) {
+  active = c === null || c.snapshots.length === 0 ? null : c;
+}
+function hasCalibration() {
+  return active !== null;
+}
+function calibrationFor(atMs) {
+  if (active === null) return null;
+  const s = active.snapshots;
+  let lo = 0, hi = s.length - 1, best = -1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    if (s[mid].validTo <= atMs) {
+      best = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  if (best < 0) return null;
+  const snap = s[best];
+  return snap.samples >= MIN_CALIBRATION_SAMPLES ? snap : null;
+}
+var coverage = /* @__PURE__ */ new WeakMap();
+function coversSignature(snap, sig) {
+  let set = coverage.get(snap);
+  if (set === void 0) {
+    set = new Set(snap.signatures);
+    coverage.set(snap, set);
+  }
+  return set.has(sig);
+}
+function correlationOf(snap, a, b) {
+  const v = snap.pairs[pairKey(a, b)];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function calibrationFromJson(j, authoritative = false) {
+  if (typeof j !== "object" || j === null) return null;
+  const raw = j.snapshots;
+  if (!Array.isArray(raw)) return null;
+  const snapshots = [];
+  for (const e of raw) {
+    if (typeof e !== "object" || e === null) continue;
+    const o = e;
+    const validTo = Number(o["validTo"]);
+    const samples = Number(o["samples"]);
+    const pairs = o["pairs"];
+    const signatures = o["signatures"];
+    if (!Number.isFinite(validTo) || !Number.isFinite(samples)) continue;
+    if (typeof pairs !== "object" || pairs === null) continue;
+    if (!Array.isArray(signatures)) continue;
+    snapshots.push({
+      validTo,
+      samples,
+      authoritative,
+      signatures: signatures.filter((s) => typeof s === "string"),
+      pairs
+    });
+  }
+  if (snapshots.length === 0) return null;
+  snapshots.sort((x, y) => x.validTo - y.validTo);
+  return { snapshots };
+}
+
+// packages/engine/src/pyramid/types.ts
+var DEFAULT_PYRAMID = {
+  minPrimaryScore: 3,
+  confirmationRatio: 0.5,
+  requireAllFilters: true,
+  waitMessage: "\u0627\u0644\u0647\u0631\u0645 \u0644\u0645 \u064A\u0643\u062A\u0645\u0644 \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0642\u0627\u062F\u0645\u0629"
+};
+function pyramidFromJson(j) {
+  const num = (v, d) => v == null ? d : Number(v);
+  return {
+    minPrimaryScore: num(j["min_primary_score"], 3),
+    confirmationRatio: num(j["confirmation_ratio"], 0.5),
+    requireAllFilters: j["require_all_filters"] ?? true,
+    waitMessage: j["wait_message"] ?? DEFAULT_PYRAMID.waitMessage
+  };
+}
+
+// packages/engine/src/pyramid/v2.ts
+var clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+var clampSigned = (v) => v < -1 ? -1 : v > 1 ? 1 : v;
+function consensusMultiplier(clusters) {
+  if (clusters <= 1) return CONSENSUS_LADDER[0];
+  if (clusters === 2) return CONSENSUS_LADDER[1];
+  if (clusters === 3) return CONSENSUS_LADDER[2];
+  return CONSENSUS_LADDER[CONSENSUS_LADDER.length - 1];
+}
+function effectiveClusters(signatures, labels, categories, atMs) {
+  const n = signatures.length;
+  if (n === 0) return { clusters: 0, calibrated: true, uncovered: null };
+  const snap = calibrationFor(atMs);
+  if (snap === null) return { clusters: 1, calibrated: false, uncovered: null };
+  for (let i = 0; i < n; i++) {
+    if (!coversSignature(snap, signatures[i])) {
+      return snap.authoritative ? { clusters: 1, calibrated: true, uncovered: labels[i] } : { clusters: 1, calibrated: false, uncovered: null };
+    }
+  }
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x) => parent[x] === x ? x : parent[x] = find(parent[x]);
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      let merge = categories[a] === categories[b];
+      if (!merge) {
+        const r = correlationOf(snap, signatures[a], signatures[b]);
+        merge = r !== null && Math.abs(r) > CORRELATION_HIGH_THRESHOLD;
+      }
+      if (merge) {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent[ra] = rb;
+      }
+    }
+  }
+  const roots = /* @__PURE__ */ new Set();
+  for (let i = 0; i < n; i++) roots.add(find(i));
+  return { clusters: roots.size, calibrated: true, uncovered: null };
+}
+function confirmationThreshold(ratio, primaryStrength, clusters, separation) {
+  const base = CONFIRMATION_FLOOR + ratio * (CONFIRMATION_CEILING - CONFIRMATION_FLOOR);
+  const strengthTerm = clamp01(
+    (primaryStrength - PRIMARY_STRENGTH_MIN) / (PRIMARY_STRENGTH_MAX - PRIMARY_STRENGTH_MIN)
+  );
+  const independenceTerm = clamp01((clusters - 1) / (INDEP_REFERENCE - 1));
+  const relief = RELIEF_WEIGHTS.strength * strengthTerm + RELIEF_WEIGHTS.independence * independenceTerm + RELIEF_WEIGHTS.separation * clamp01(separation);
+  return base - (base - CONFIRMATION_FLOOR) * relief;
 }
 function evaluateStrategyPro(strategy, ctx) {
   const { candles, currentPrice } = ctx;
   const clock = ctx.clock ?? systemClock();
   const cache = ctx.cache ?? /* @__PURE__ */ new Map();
+  const atMs = candles.length > 0 ? candles[candles.length - 1].time : 0;
   const compute = (r) => {
     const v = computeIndicator(candles, r, currentPrice, clock, cache);
     return v === void 0 ? 0 : v;
@@ -3018,130 +3181,185 @@ function evaluateStrategyPro(strategy, ctx) {
   const primary = rules.filter((r) => r.role === "primary");
   const confirm = rules.filter((r) => r.role === "confirm");
   const filters = rules.filter((r) => r.role === "filter");
+  const base = rules.filter(
+    (r) => r.role !== "primary" && r.role !== "confirm" && r.role !== "filter"
+  );
   let rawCall = 0, rawPut = 0;
-  const categoriesCall = /* @__PURE__ */ new Set();
-  const categoriesPut = /* @__PURE__ */ new Set();
+  const catsCall = /* @__PURE__ */ new Set(), catsPut = /* @__PURE__ */ new Set();
+  const sigCall = [], labCall = [], keyCall = [];
+  const sigPut = [], labPut = [], keyPut = [];
   for (const r of primary) {
     try {
       if (!checkCondition(r, compute(r))) continue;
       const cat = r.type.length > 0 ? r.type : categoryForIndicator(r);
-      if (r.signal === "CALL") {
+      const side = r.signal === "CALL" ? "CALL" : r.signal === "PUT" ? "PUT" : rawCall >= rawPut ? "CALL" : "PUT";
+      if (side === "CALL") {
         rawCall += r.score;
-        if (cat) categoriesCall.add(cat);
-      } else if (r.signal === "PUT") {
+        if (cat) {
+          catsCall.add(cat);
+          sigCall.push(ruleSignature(r));
+          labCall.push(r.indicator);
+          keyCall.push(cat);
+        }
+      } else {
         rawPut += r.score;
-        if (cat) categoriesPut.add(cat);
-      } else if (r.signal === "dominant" || r.signal === "confirm") {
-        if (rawCall >= rawPut) {
-          rawCall += r.score;
-          if (cat) categoriesCall.add(cat);
-        } else {
-          rawPut += r.score;
-          if (cat) categoriesPut.add(cat);
+        if (cat) {
+          catsPut.add(cat);
+          sigPut.push(ruleSignature(r));
+          labPut.push(r.indicator);
+          keyPut.push(cat);
         }
       }
     } catch {
       continue;
     }
   }
-  const multipliedCall = rawCall * consensusMultiplier(categoriesCall.size);
-  const multipliedPut = rawPut * consensusMultiplier(categoriesPut.size);
-  const isPrimaryCall = multipliedCall >= multipliedPut;
-  const primaryDir = isPrimaryCall ? "CALL" : "PUT";
-  const winningPrimaryScore = isPrimaryCall ? multipliedCall : multipliedPut;
+  const cCall = effectiveClusters(sigCall, labCall, keyCall, atMs);
+  const cPut = effectiveClusters(sigPut, labPut, keyPut, atMs);
+  const multipliedCall = rawCall * consensusMultiplier(cCall.clusters);
+  const multipliedPut = rawPut * consensusMultiplier(cPut.clusters);
+  const isCall = multipliedCall >= multipliedPut;
+  const direction = isCall ? "CALL" : "PUT";
+  const winning = isCall ? multipliedCall : multipliedPut;
+  const losing = isCall ? multipliedPut : multipliedCall;
+  const clusters = isCall ? cCall.clusters : cPut.clusters;
+  const calibrated = isCall ? cCall.calibrated : cPut.calibrated;
+  const uncovered = isCall ? cCall.uncovered : cPut.uncovered;
+  const rawWinning = isCall ? rawCall : rawPut;
+  let capacity = 0;
+  for (const r of primary) {
+    if (r.signal === direction || r.signal === "dominant" || r.signal === "confirm") {
+      capacity += Math.abs(r.score);
+    }
+  }
+  const primaryStrength = capacity > 0 ? clamp01(rawWinning / capacity) : 0;
+  const separation = winning + losing > 0 ? (winning - losing) / (winning + losing) : 0;
+  const requireAll = strategy.pyramid?.requireAllFilters !== false;
   let filterPassed = true;
   let filterFailReason = null;
-  for (const r of filters) {
-    try {
-      if (!checkCondition(r, compute(r))) {
-        filterPassed = false;
-        filterFailReason = `\u0641\u0634\u0644 \u0641\u0644\u062A\u0631 "${r.indicator}"`;
-        break;
+  if (filters.length > 0) {
+    let passes = 0;
+    let firstFailure = null;
+    for (const r of filters) {
+      let ok;
+      try {
+        ok = checkCondition(r, compute(r));
+        if (!ok && firstFailure === null) firstFailure = `\u0641\u0634\u0644 \u0641\u0644\u062A\u0631 "${r.indicator}"`;
+      } catch {
+        ok = false;
+        if (firstFailure === null) firstFailure = `\u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062D\u0633\u0627\u0628 \u0641\u0644\u062A\u0631 "${r.indicator}"`;
       }
-    } catch {
-      filterPassed = false;
-      filterFailReason = `\u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062D\u0633\u0627\u0628 \u0641\u0644\u062A\u0631 "${r.indicator}"`;
-      break;
+      if (ok) passes++;
+      else if (requireAll) break;
+    }
+    filterPassed = requireAll ? passes === filters.length : passes > 0;
+    if (!filterPassed) {
+      filterFailReason = requireAll ? firstFailure : `\u0644\u0645 \u064A\u0646\u062C\u062D \u0623\u064A \u0641\u0644\u062A\u0631 \u0645\u0646 ${filters.length}`;
     }
   }
-  let agreed = 0, totalConfirm = 0, opposingTrue = 0, confirmScoreAdded = 0;
+  const confirmScores = confirm.map((r) => r.score).sort((a, b) => a - b);
+  const median = confirmScores.length === 0 ? 0 : confirmScores.length % 2 === 1 ? confirmScores[(confirmScores.length - 1) / 2] : (confirmScores[confirmScores.length / 2 - 1] + confirmScores[confirmScores.length / 2]) / 2;
+  let rawConfirmation = 0;
+  let capMax = 0, capMin = 0;
+  let agreed = 0, opposingTrue = 0, confirmScoreAdded = 0;
   for (const r of confirm) {
-    totalConfirm++;
+    const ruleDir = r.signal === "dominant" || r.signal === "confirm" ? direction : r.signal;
+    if (ruleDir === direction) capMax += Math.abs(r.score);
+    else capMin += Math.abs(r.score);
     try {
-      const isTrue = checkCondition(r, compute(r));
-      const ruleDir = r.signal === "dominant" || r.signal === "confirm" ? primaryDir : r.signal;
-      if (isTrue) {
-        if (ruleDir === primaryDir) {
-          agreed++;
-          confirmScoreAdded += r.score;
-        } else {
-          opposingTrue++;
-        }
+      if (!checkCondition(r, compute(r))) continue;
+      const strong = r.score >= median;
+      if (ruleDir === direction) {
+        agreed++;
+        confirmScoreAdded += r.score;
+        rawConfirmation += (strong ? 1 : 0.5) * r.score;
+      } else {
+        opposingTrue++;
+        rawConfirmation += (strong ? -1 : -0.5) * r.score;
       }
     } catch {
       continue;
     }
   }
-  let finalCall = multipliedCall;
-  let finalPut = multipliedPut;
-  if (primaryDir === "CALL") finalCall += confirmScoreAdded;
-  else finalPut += confirmScoreAdded;
-  const base = rules.filter(
-    (r) => r.role !== "primary" && r.role !== "confirm" && r.role !== "filter"
+  const normalized = clampSigned(
+    rawConfirmation >= 0 ? capMax > 0 ? rawConfirmation / capMax : 0 : capMin > 0 ? rawConfirmation / capMin : 0
   );
+  const conflictPenalty = capMin > 0 ? clamp01(opposingTrue * (capMin / confirm.length) / capMin) : 0;
+  const ratio = strategy.pyramid?.confirmationRatio ?? DEFAULT_PYRAMID.confirmationRatio;
+  const threshold = confirmationThreshold(ratio, primaryStrength, clusters, separation);
+  const confirmationPass = confirm.length === 0 || normalized >= threshold;
+  let finalCall = multipliedCall, finalPut = multipliedPut;
+  if (direction === "CALL") finalCall += confirmScoreAdded;
+  else finalPut += confirmScoreAdded;
   for (const r of base) {
     try {
       if (!checkCondition(r, compute(r))) continue;
       if (r.signal === "CALL") finalCall += r.score;
       else if (r.signal === "PUT") finalPut += r.score;
-      else if (r.signal === "dominant" || r.signal === "confirm") {
-        if (finalCall >= finalPut) finalCall += r.score;
-        else finalPut += r.score;
-      }
+      else if (finalCall >= finalPut) finalCall += r.score;
+      else finalPut += r.score;
     } catch {
       continue;
     }
   }
-  const finalWinningScore = primaryDir === "CALL" ? finalCall : finalPut;
-  const finalOppositeScore = primaryDir === "CALL" ? finalPut : finalCall;
-  const gap = Math.abs(finalWinningScore - finalOppositeScore);
-  let confirmAlignment = "neutral";
-  if (totalConfirm > 0) {
-    if (opposingTrue > 0) confirmAlignment = "conflict";
-    else if (agreed > 0) confirmAlignment = "aligned";
-  }
   const minPrimary = strategy.pyramid?.minPrimaryScore ?? DEFAULT_PYRAMID.minPrimaryScore;
-  const ratioNeeded = strategy.pyramid?.confirmationRatio ?? DEFAULT_PYRAMID.confirmationRatio;
   let reasonBlocked = null;
-  if (winningPrimaryScore < minPrimary) {
-    reasonBlocked = `\u0627\u0644\u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u0623\u0648\u0644\u0649 (\u0627\u0644\u0623\u0633\u0627\u0633): \u0627\u0644\u0646\u062A\u064A\u062C\u0629 ${winningPrimaryScore.toFixed(1)} < \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 ${dartDouble(minPrimary)}`;
-  } else if (strategy.pyramid?.requireAllFilters === true && !filterPassed) {
+  if (uncovered !== null) {
+    reasonBlocked = `\u0627\u0644\u0645\u0624\u0634\u0631 "${uncovered}" \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0645\u0635\u0641\u0648\u0641\u0629 \u0627\u0644\u0627\u0631\u062A\u0628\u0627\u0637 \u0628\u062A\u0639\u0631\u064A\u0641\u0647 \u0627\u0644\u0645\u0643\u062A\u0648\u0628 \u2014 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629 \u0646\u064F\u0634\u0631\u062A \u0628\u062F\u0648\u0646 \u0645\u0639\u0627\u064A\u0631\u0629`;
+  } else if (winning < minPrimary) {
+    reasonBlocked = `\u0627\u0644\u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u0623\u0648\u0644\u0649 (\u0627\u0644\u0623\u0633\u0627\u0633): \u0627\u0644\u0646\u062A\u064A\u062C\u0629 ${winning.toFixed(1)} < \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 ${minPrimary.toFixed(1)}`;
+  } else if (primaryStrength < PRIMARY_STRENGTH_MIN) {
+    reasonBlocked = `\u0642\u0648\u0629 \u0627\u0644\u0623\u0633\u0627\u0633 ${(primaryStrength * 100).toFixed(0)}% < \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 ${(PRIMARY_STRENGTH_MIN * 100).toFixed(0)}%`;
+  } else if (!filterPassed) {
     reasonBlocked = `\u0627\u0644\u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u062B\u0627\u0644\u062B\u0629 (\u0627\u0644\u0641\u0644\u0627\u062A\u0631): ${filterFailReason}`;
-  } else if (totalConfirm > 0 && agreed / totalConfirm < ratioNeeded) {
-    const pct = Math.round(agreed / totalConfirm * 100);
-    reasonBlocked = `\u0627\u0644\u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u062B\u0627\u0646\u064A\u0629 (\u0627\u0644\u062A\u0623\u0643\u064A\u062F): ${agreed}/${totalConfirm} = ${pct}% < \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 ${Math.round(ratioNeeded * 100)}%`;
-  } else if (gap < MIN_GAP) {
-    reasonBlocked = `\u0627\u0644\u0641\u0627\u0631\u0642 \u0628\u064A\u0646 \u0627\u0644\u0627\u062A\u062C\u0627\u0647\u064A\u0646 ${gap.toFixed(1)} < \u062D\u062F \u0627\u0644\u0641\u0627\u0631\u0642 \u0627\u0644\u0623\u062F\u0646\u0649 (${MIN_GAP.toFixed(1)})`;
+  } else if (!confirmationPass) {
+    reasonBlocked = `\u0627\u0644\u0645\u0631\u062D\u0644\u0629 \u0627\u0644\u062B\u0627\u0646\u064A\u0629 (\u0627\u0644\u062A\u0623\u0643\u064A\u062F): ${normalized.toFixed(2)} < \u0627\u0644\u062D\u062F \u0627\u0644\u0645\u0637\u0644\u0648\u0628 ${threshold.toFixed(2)}`;
+  } else if (separation < MIN_SIGNAL_SEPARATION) {
+    reasonBlocked = `\u0627\u0644\u0641\u0635\u0644 \u0628\u064A\u0646 \u0627\u0644\u0627\u062A\u062C\u0627\u0647\u064A\u0646 ${(separation * 100).toFixed(0)}% < \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u062F\u0646\u0649 ${(MIN_SIGNAL_SEPARATION * 100).toFixed(0)}%`;
   }
-  let confidenceTier = null;
-  if (reasonBlocked === null) {
-    const catCount = primaryDir === "CALL" ? categoriesCall.size : categoriesPut.size;
-    if (catCount >= 3 && confirmAlignment !== "conflict") confidenceTier = "STRONG";
-    else if (catCount === 2 && confirmAlignment !== "conflict" || catCount >= 3 && confirmAlignment === "conflict") confidenceTier = "MEDIUM";
-    else confidenceTier = "WEAK";
-  }
+  const confirmAlignment = confirm.length === 0 ? "neutral" : opposingTrue > 0 ? "conflict" : agreed > 0 ? "aligned" : "neutral";
+  const qualityScore = clamp01(
+    QUALITY_WEIGHTS.primaryStrength * primaryStrength + QUALITY_WEIGHTS.consensus * clamp01((clusters - 1) / (INDEP_REFERENCE - 1)) + QUALITY_WEIGHTS.confirmation * clamp01((normalized + 1) / 2) + QUALITY_WEIGHTS.separation * clamp01(separation) + QUALITY_WEIGHTS.conflict * (1 - conflictPenalty)
+  ) * 100;
+  const rawCats = isCall ? catsCall.size : catsPut.size;
   return {
     result: reasonBlocked === null ? "SIGNAL" : "NO_SIGNAL",
-    direction: reasonBlocked === null ? primaryDir : null,
-    confidenceTier,
+    direction: reasonBlocked === null ? direction : null,
     rawScore: { CALL: rawCall, PUT: rawPut },
     finalScore: { CALL: finalCall, PUT: finalPut },
-    categoryCount: { CALL: categoriesCall.size, PUT: categoriesPut.size },
-    gap,
+    categoryCount: { CALL: catsCall.size, PUT: catsPut.size },
     filterPassed,
     confirmAlignment,
-    reasonBlocked
+    reasonBlocked,
+    qualityScore,
+    primaryScore: winning,
+    callPrimaryScore: multipliedCall,
+    putPrimaryScore: multipliedPut,
+    primaryGap: Math.abs(multipliedCall - multipliedPut),
+    primaryStrength,
+    rawConfirmationScore: rawConfirmation,
+    normalizedConfirmationScore: normalized,
+    effectiveConfirmationMin: -capMin,
+    effectiveConfirmationMax: capMax,
+    effectiveConfirmationThreshold: threshold,
+    confirmationCapacity: confirm.length,
+    finalConfirmationPass: confirmationPass,
+    consensusScore: consensusMultiplier(clusters),
+    categories: { CALL: [...catsCall], PUT: [...catsPut] },
+    effectiveIndependentCategories: { CALL: cCall.clusters, PUT: cPut.clusters },
+    correlationAdjustment: rawCats - clusters,
+    calibrated,
+    signalSeparation: separation,
+    conflictPenalty,
+    reason: reasonBlocked ?? `${direction} \u2014 \u062C\u0648\u062F\u0629 ${qualityScore.toFixed(0)}/100`
   };
+}
+
+// packages/engine/src/strategy.ts
+function effectiveMaxScore(strategy) {
+  if (strategy.maxScore > 0) return strategy.maxScore;
+  const sum = strategy.rules.filter((r) => r.enabled).reduce((s, r) => s + Math.abs(r.score), 0);
+  return sum > 0 ? sum : 1;
 }
 function evaluateRules(strategy, ctx) {
   const cache = ctx.cache ?? /* @__PURE__ */ new Map();
@@ -3170,14 +3388,121 @@ function evaluateRules(strategy, ctx) {
   }
   return callScore - putScore;
 }
-function pyramidFromJson(j) {
-  const num = (v, d) => v == null ? d : Number(v);
-  return {
-    minPrimaryScore: num(j["min_primary_score"], 3),
-    confirmationRatio: num(j["confirmation_ratio"], 0.5),
-    requireAllFilters: j["require_all_filters"] ?? true,
-    waitMessage: j["wait_message"] ?? DEFAULT_PYRAMID.waitMessage
-  };
+
+// packages/engine/src/pyramid/calibrate.ts
+var GAP_TOLERANCE = 1.5;
+function contiguousRuns(candles, stepSeconds, minLength) {
+  const runs = [];
+  let run = [];
+  for (let i = 0; i < candles.length; i++) {
+    if (i > 0 && (candles[i].time - candles[i - 1].time) / 1e3 > stepSeconds * GAP_TOLERANCE) {
+      if (run.length >= minLength) runs.push(run);
+      run = [];
+    }
+    run.push(candles[i]);
+  }
+  if (run.length >= minLength) runs.push(run);
+  return runs;
+}
+function primaryRulesOf(strategies) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const s of strategies) {
+    for (const r of s.rules) {
+      if (!r.enabled || r.role !== "primary") continue;
+      const sig = ruleSignature(r);
+      if (!seen.has(sig)) seen.set(sig, r);
+    }
+  }
+  return [...seen.values()];
+}
+function buildCalibration(rules, series, options = {}) {
+  const warmup = options.warmup ?? 55;
+  const refreshBars = options.refreshBars ?? 8;
+  const minSamples = options.minSamples ?? 200;
+  const fireMin = options.fireMin ?? 0.05;
+  const fireMax = options.fireMax ?? 0.95;
+  const stepSeconds = options.stepSeconds ?? 3600;
+  const segments = [];
+  for (const candles of Object.values(series)) {
+    segments.push(...contiguousRuns(candles, stepSeconds, warmup + 7));
+  }
+  const K = rules.length;
+  const observations = [];
+  const fired = new Array(K).fill(0);
+  for (const seg of segments) {
+    for (let i = warmup; i < seg.length; i++) {
+      const window = seg.slice(0, i + 1);
+      const current = window[window.length - 1];
+      const clock = systemClock(new Date(current.time));
+      const cache = /* @__PURE__ */ new Map();
+      const v = new Uint8Array(K);
+      for (let k = 0; k < K; k++) {
+        const rule = rules[k];
+        let hit = false;
+        try {
+          hit = checkCondition(rule, computeIndicator(window, rule, current.close, clock, cache) ?? 0);
+        } catch {
+          hit = false;
+        }
+        if (hit) {
+          fired[k]++;
+          v[k] = 1;
+        }
+      }
+      observations.push({ time: current.time, v });
+    }
+  }
+  const bars = observations.length;
+  observations.sort((a, b) => a.time - b.time);
+  const definitions = rules.map((r, k) => {
+    const rate = bars > 0 ? fired[k] / bars : 0;
+    return {
+      signature: ruleSignature(r),
+      indicator: r.indicator,
+      condition: r.condition,
+      target: r.pattern ?? (r.value != null ? String(r.value) : ""),
+      firingRate: Number(rate.toFixed(4)),
+      live: rate >= fireMin && rate <= fireMax
+    };
+  });
+  const live = definitions.map((d, k) => d.live ? k : -1).filter((k) => k >= 0);
+  const P = live.length;
+  const sx = new Float64Array(P), sxx = new Float64Array(P), sxy = new Float64Array(P * P);
+  let n = 0;
+  const uniqueTimes = [...new Set(observations.map((o) => o.time))].sort((a, b) => a - b);
+  const snapshots = [];
+  let oi = 0;
+  for (const boundary of uniqueTimes.filter((_, i) => i % refreshBars === 0)) {
+    while (oi < observations.length && observations[oi].time < boundary) {
+      const v = observations[oi].v;
+      n++;
+      for (let a = 0; a < P; a++) {
+        const va = v[live[a]];
+        sx[a] += va;
+        sxx[a] += va * va;
+        for (let b = a; b < P; b++) sxy[a * P + b] += va * v[live[b]];
+      }
+      oi++;
+    }
+    const pairs = {};
+    const signatures = [];
+    if (n >= minSamples) {
+      for (let a = 0; a < P; a++) signatures.push(definitions[live[a]].signature);
+      for (let a = 0; a < P; a++) {
+        for (let b = a + 1; b < P; b++) {
+          const cov = sxy[a * P + b] / n - sx[a] / n * (sx[b] / n);
+          const va = sxx[a] / n - (sx[a] / n) ** 2;
+          const vb = sxx[b] / n - (sx[b] / n) ** 2;
+          if (va <= 0 || vb <= 0) continue;
+          const r = Math.abs(cov / Math.sqrt(va * vb));
+          if (!Number.isFinite(r)) continue;
+          pairs[pairKey(definitions[live[a]].signature, definitions[live[b]].signature)] = Number(r.toFixed(4));
+        }
+      }
+    }
+    snapshots.push({ validTo: boundary, samples: n, authoritative: false, signatures, pairs });
+  }
+  return { definitions, snapshots, bars, symbols: Object.keys(series).length, segments: segments.length };
 }
 
 // packages/engine/src/config.ts
@@ -3439,8 +3764,9 @@ function scoreStandard(ctx, dynamicStrategy, cfg = DEFAULT_STRATEGY_CONFIG) {
 }
 
 // packages/engine/src/signal.ts
+var CONFIDENCE_SATURATION_SCORE = 45;
 function confidenceFor(absScore, base, max) {
-  const c = base + absScore / 45 * (max - base);
+  const c = base + absScore / CONFIDENCE_SATURATION_SCORE * (max - base);
   return c < base ? base : c > max ? max : c;
 }
 function alignExpiry(nowMs, selectedMinutes) {
@@ -3482,6 +3808,7 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  CONFIDENCE_SATURATION_SCORE,
   DEFAULT_PYRAMID,
   DEFAULT_STRATEGY_CONFIG,
   VOLUME_DEAD,
@@ -3496,7 +3823,10 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   atr,
   avgBodySize,
   bollingerBands,
+  buildCalibration,
   cacheKey,
+  calibrationFor,
+  calibrationFromJson,
   candlePatterns,
   canonicalName,
   categoryForIndicator,
@@ -3506,12 +3836,16 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   cmf,
   computeIndicator,
   confidenceFor,
+  contiguousRuns,
+  correlationOf,
+  coversSignature,
   effectiveMaxScore,
   ema,
   evaluateRules,
   evaluateStrategyPro,
   fullMacd,
   guaranteedWinExit,
+  hasCalibration,
   indicatorFor,
   isRegistered,
   liquidityZones,
@@ -3520,6 +3854,8 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   mfi,
   obv,
   outcomeFor,
+  pairKey,
+  primaryRulesOf,
   pyramidFromJson,
   registeredNames,
   registeredNamesInOrder,
@@ -3528,8 +3864,10 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   rsi,
   rsiDivergence,
   ruleFromJson,
+  ruleSignature,
   scoreStandard,
   scoreV2,
+  setCalibration,
   sma,
   stochastic,
   strategyConfigFromJson,
@@ -3544,5 +3882,5 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "4007f96f65149fc3343d3b35c1e1f0e2ce8f04dbb68858d6e718d9c4ca070cb9";
+module.exports.BUNDLE_SOURCE_HASH = "96507b39ce17bdb533977ddd04e48e8c9862e5a8dd5192baf252e262dca1353b";
 

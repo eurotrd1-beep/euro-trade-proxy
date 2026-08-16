@@ -326,11 +326,50 @@ const server = http.createServer(async (req, res) => {
           lastGStatus = (gerr && gerr.status) || null;
           lastReason  = (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : lastReason;
           // 400/401/403 = key/request problem, not model availability — stop early.
-          if (gr.status && gr.status !== 429 && gr.status !== 404) break;
+          // Fall through to the next model on anything that is not the key's
+          // fault. 503 UNAVAILABLE ("this model is experiencing high demand")
+          // is the single most common failure and the exact case this ladder
+          // exists for — the old condition broke out of the loop on it, so the
+          // three fallbacks below never ran once and the feature read as dead.
+          // Only a malformed request or a rejected key is fatal; another model
+          // would fail those identically.
+          if (gr.status === 400 || gr.status === 401 || gr.status === 403) break;
         } catch (e) { lastReason = e.message; }
       }
       json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus });
     });
+    return;
+  }
+
+  // ── GET /api/gemini/models — which models this key can actually use ─────────
+  //
+  // Added because "Gemini is down" was unanswerable from the outside: the
+  // failure said only "high demand", with no way to tell whether that was one
+  // model or every model, or whether the fallback ladder had run at all. This
+  // asks Google directly and returns the list the key is entitled to, so the
+  // next time the button fails the answer takes one request instead of a
+  // guessing session.
+  if (url.pathname === '/api/gemini/models' && req.method === 'GET') {
+    const key = process.env.GEMINI_API_KEY || '';
+    if (!key) { json({ available: false, reason: 'GEMINI_API_KEY غير مضبوط' }); return; }
+    (async () => {
+      try {
+        const r = await httpsRequest(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+          { timeoutMs: 20000 });
+        let parsed = null;
+        try { parsed = JSON.parse(r.body); } catch (_) {}
+        if (!parsed || !Array.isArray(parsed.models)) {
+          json({ available: false, status: r.status, reason: (parsed && parsed.error && parsed.error.message) || 'رد غير متوقع' });
+          return;
+        }
+        const usable = parsed.models
+          .filter((m) => Array.isArray(m.supportedGenerationMethods)
+            && m.supportedGenerationMethods.indexOf('generateContent') >= 0)
+          .map((m) => String(m.name || '').replace(/^models\//, ''));
+        json({ available: true, count: usable.length, models: usable });
+      } catch (e) { json({ available: false, reason: e.message }); }
+    })();
     return;
   }
 
@@ -365,6 +404,10 @@ const server = http.createServer(async (req, res) => {
       // the next one costs nothing.
       const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
       let lastReason = 'Gemini لم يرجّع نصاً', lastStatus = 0, lastGStatus = null;
+      // What each rung actually answered. Without it a failure reports only
+      // "high demand" and gives no way to tell whether the ladder even ran —
+      // which is exactly where the old break-on-503 hid for so long.
+      const tried = [];
 
       for (const model of MODELS) {
         try {
@@ -391,10 +434,18 @@ const server = http.createServer(async (req, res) => {
           lastStatus  = gr.status;
           lastGStatus = (gerr && gerr.status) || null;
           lastReason  = (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : lastReason;
-          if (gr.status && gr.status !== 429 && gr.status !== 404) break;
+          tried.push({ model: model, status: gr.status, googleStatus: lastGStatus });
+          // Fall through to the next model on anything that is not the key's
+          // fault. 503 UNAVAILABLE ("this model is experiencing high demand")
+          // is the single most common failure and the exact case this ladder
+          // exists for — the old condition broke out of the loop on it, so the
+          // three fallbacks below never ran once and the feature read as dead.
+          // Only a malformed request or a rejected key is fatal; another model
+          // would fail those identically.
+          if (gr.status === 400 || gr.status === 401 || gr.status === 403) break;
         } catch (e) { lastReason = e.message; }
       }
-      json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus });
+      json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus, tried });
     });
     return;
   }
