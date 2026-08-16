@@ -307,7 +307,21 @@ const server = http.createServer(async (req, res) => {
       // Free-tier model availability varies by key/region (some return limit:0),
       // so try current models in order and use the first that actually returns
       // text. limit:0 quota errors come back instantly, so misses cost nothing.
-      const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+      // Ordered by how likely the rung is to ANSWER, not by how good it is.
+      //
+      // The previous ladder was ['gemini-2.5-flash', 'gemini-2.0-flash',
+      // 'gemini-flash-latest', 'gemini-1.5-flash'] and it had rotted in two
+      // ways at once. Asking the key what it can actually reach returned 37
+      // models, and two of those four were not among them — 2.0-flash and
+      // 1.5-flash have been retired, so they 404 instantly. Of the two that
+      // survived, `gemini-flash-latest` is a moving pointer that currently
+      // resolves to 2.5-flash, so it fails the same way for the same reason.
+      // A four-rung ladder was really one rung and two dead ends.
+      //
+      // These four are distinct model families, taken from the live list. But
+      // the point of the fallback below is that this array is allowed to rot
+      // again without taking the feature with it.
+      const MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'];
       let lastReason = 'Gemini لم يرجّع نصاً', lastStatus = 0, lastGStatus = null;
       for (const model of MODELS) {
         try {
@@ -402,14 +416,32 @@ const server = http.createServer(async (req, res) => {
       // Same ladder as /api/diagnose: free-tier model availability varies by
       // key and region, and a limit:0 quota error returns instantly, so trying
       // the next one costs nothing.
-      const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+      // Ordered by how likely the rung is to ANSWER, not by how good it is.
+      //
+      // The previous ladder was ['gemini-2.5-flash', 'gemini-2.0-flash',
+      // 'gemini-flash-latest', 'gemini-1.5-flash'] and it had rotted in two
+      // ways at once. Asking the key what it can actually reach returned 37
+      // models, and two of those four were not among them — 2.0-flash and
+      // 1.5-flash have been retired, so they 404 instantly. Of the two that
+      // survived, `gemini-flash-latest` is a moving pointer that currently
+      // resolves to 2.5-flash, so it fails the same way for the same reason.
+      // A four-rung ladder was really one rung and two dead ends.
+      //
+      // These four are distinct model families, taken from the live list. But
+      // the point of the fallback below is that this array is allowed to rot
+      // again without taking the feature with it.
+      const MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'];
       let lastReason = 'Gemini لم يرجّع نصاً', lastStatus = 0, lastGStatus = null;
       // What each rung actually answered. Without it a failure reports only
       // "high demand" and gives no way to tell whether the ladder even ran —
       // which is exactly where the old break-on-503 hid for so long.
       const tried = [];
 
-      for (const model of MODELS) {
+      // Returns the text, or null after recording why the rung failed. `fatal`
+      // means stop the ladder: a malformed request or a rejected key fails
+      // identically on every model, so trying more is just latency.
+      let fatal = false;
+      async function attempt(model) {
         try {
           const gr = await httpsRequest(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
@@ -429,22 +461,57 @@ const server = http.createServer(async (req, res) => {
           try { parsed = JSON.parse(gr.body); } catch (_) {}
           let text = '';
           try { text = parsed.candidates[0].content.parts[0].text; } catch (_) {}
-          if (text) { json({ available: true, text, model }); return; }
+          if (text) return text;
           const gerr = parsed && parsed.error;
           lastStatus  = gr.status;
           lastGStatus = (gerr && gerr.status) || null;
           lastReason  = (gerr && gerr.message) ? ('Gemini: ' + gerr.message) : lastReason;
           tried.push({ model: model, status: gr.status, googleStatus: lastGStatus });
-          // Fall through to the next model on anything that is not the key's
-          // fault. 503 UNAVAILABLE ("this model is experiencing high demand")
-          // is the single most common failure and the exact case this ladder
-          // exists for — the old condition broke out of the loop on it, so the
-          // three fallbacks below never ran once and the feature read as dead.
-          // Only a malformed request or a rejected key is fatal; another model
-          // would fail those identically.
-          if (gr.status === 400 || gr.status === 401 || gr.status === 403) break;
+          // 503 UNAVAILABLE ("this model is experiencing high demand") is the
+          // most common failure by far and the exact case a ladder exists for.
+          // The old condition broke out of the loop on it, so the rungs below
+          // never ran once and the whole feature read as dead.
+          if (gr.status === 400 || gr.status === 401 || gr.status === 403) fatal = true;
+        } catch (e) { lastReason = e.message; tried.push({ model: model, error: e.message }); }
+        return null;
+      }
+
+      for (const model of MODELS) {
+        const text = await attempt(model);
+        if (text) { json({ available: true, text, model }); return; }
+        if (fatal) break;
+      }
+
+      // The hardcoded ladder above is a fast path, not the contract. Model
+      // names get retired — two of the previous four had been, silently — so
+      // when every rung has failed for a reason that is not the key's fault,
+      // ask the key what it can actually reach and try that instead. This is
+      // what stops the same outage recurring the next time Google renames
+      // something.
+      if (!fatal) {
+        try {
+          const lr = await httpsRequest(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+            { timeoutMs: 20000 });
+          let listed = null;
+          try { listed = JSON.parse(lr.body); } catch (_) {}
+          const names = (listed && Array.isArray(listed.models) ? listed.models : [])
+            .filter((m) => Array.isArray(m.supportedGenerationMethods)
+              && m.supportedGenerationMethods.indexOf('generateContent') >= 0)
+            .map((m) => String(m.name || '').replace(/^models\//, ''))
+            // Text generation only, cheapest tier first. Anything for images,
+            // speech, robotics or research is either wrong for this or slow.
+            .filter((n) => n.indexOf('flash') >= 0
+              && n.indexOf('image') < 0 && n.indexOf('tts') < 0
+              && n.indexOf('preview') < 0 && MODELS.indexOf(n) < 0);
+          for (const model of names.slice(0, 3)) {
+            const text = await attempt(model);
+            if (text) { json({ available: true, text, model, viaDiscovery: true }); return; }
+            if (fatal) break;
+          }
         } catch (e) { lastReason = e.message; }
       }
+
       json({ available: false, reason: lastReason, status: lastStatus, googleStatus: lastGStatus, tried });
     });
     return;
