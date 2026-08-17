@@ -94,6 +94,9 @@ global.broadcastOtcPrice = function(otcSym, price) {
 const PORT        = process.env.PORT || 3000;
 const MAX_CANDLES = 100;   // candles kept per series (served)
 
+/** Ceiling on one bulk request. The whole catalogue is 89 pairs. */
+const MAX_BULK_SYMBOLS = 120;
+
 
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 
@@ -205,6 +208,53 @@ const server = http.createServer(async (req, res) => {
       status: candles.length ? 'ok' : 'loading',
       candles: candles.slice(-MAX_CANDLES),
     });
+    return;
+  }
+
+  // ── GET /api/otc/candles-bulk?symbols=a,b,c&interval=1m ──────────────────
+  //
+  // The single-symbol endpoint above, N times, in one request.
+  //
+  // The app watches every enabled pair for a setup now, not just the one on
+  // screen. Asking one at a time meant 89 requests on every candle boundary
+  // from every open app — all of them landing in the same 200ms window, all of
+  // them served from the same in-memory map. One request costs the proxy
+  // essentially nothing and costs the client one connection instead of 89.
+  if (url.pathname === '/api/otc/candles-bulk') {
+    const interval = url.searchParams.get('interval') || '1m';
+    const symbols = (url.searchParams.get('symbols') || '')
+      .split(',').map(s => s.trim()).filter(Boolean).slice(0, MAX_BULK_SYMBOLS);
+
+    if (!symbols.length) { json({ error: 'symbols required' }, 400); return; }
+
+    const out = {};
+    const missing = [];
+    for (const symbol of symbols) {
+      const key = `${symbol}_${interval}`;
+      const held = global.otcClient && global.otcClient.store && global.otcClient.store.candles[key];
+      if (held && held.length) out[symbol] = held.slice(-MAX_CANDLES);
+      else missing.push(key);
+    }
+
+    // Cold start: one query for everything memory did not have, rather than
+    // one per symbol.
+    if (missing.length && db) {
+      try {
+        const { data, error } = await db.from('candles').select('key, data').in('key', missing);
+        if (!error && Array.isArray(data)) {
+          for (const row of data) {
+            if (!Array.isArray(row.data) || !row.data.length) continue;
+            const symbol = row.key.slice(0, row.key.length - (interval.length + 1));
+            out[symbol] = row.data.slice(-MAX_CANDLES);
+            if (global.otcClient && global.otcClient.store) {
+              global.otcClient.store.candles[row.key] = row.data;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    json({ status: Object.keys(out).length ? 'ok' : 'loading', candles: out });
     return;
   }
 

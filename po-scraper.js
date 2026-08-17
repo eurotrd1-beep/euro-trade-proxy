@@ -184,6 +184,69 @@ if (createClient && SUPABASE_URL && SUPABASE_KEY) {
   warn('Supabase not configured — OTC scraper will run without persistence');
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  Asset policy — what this system is allowed to see
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Pocket Option's catalogue carries 183 assets. This system trades 89 of them:
+// every currency pair, gold and silver, and five crypto. Stocks and indices
+// were dropped outright, and so was everything else in commodities and crypto.
+//
+// The filter lives HERE, at the scraper, and not in the app's asset list —
+// because hiding a pair in the UI still subscribes to it, still builds four
+// candle series from its ticks, and still writes them to `candles` forever.
+// The instruction was that a removed asset is not scraped and not stored at
+// all, as if it were never in the catalogue, and the only place that can be
+// true is the process that does the scraping and the storing.
+//
+// Applied at four points, deliberately overlapping: discovery (never written
+// to the library), the enabled list read from the DB, the enabled list pushed
+// by realtime, and history frames PO sends unasked. Any one of them is enough;
+// all four mean no future caller can route around it by accident.
+
+/**
+ * The nine non-currency assets that stay, by PO's exact symbol.
+ *
+ * Gold and silver are the USD pairs only. XAUEUR and XAGEUR are separate
+ * markets that were not asked for, so they go with the rest.
+ */
+const ALLOWED_ASSETS = new Set([
+  'XAUUSD', 'XAUUSD_otc',   // gold
+  'XAGUSD', 'XAGUSD_otc',   // silver
+  'BTCUSD', 'BTCUSD_otc',   // bitcoin
+  'ETHUSD', 'ETHUSD_otc',   // ethereum
+  'SOL-USD_otc',            // solana (OTC only — PO lists no live SOL pair)
+]);
+
+/**
+ * Currency legs, as ISO codes, taken from the 80 pairs PO actually lists.
+ *
+ * A shape test alone is not enough to recognise a currency pair: BCHEUR,
+ * BCHGBP and BCHJPY are six letters each and are Bitcoin Cash. Matching the
+ * legs against real currency codes is what keeps those out, and it fails
+ * closed — a currency PO adds later is skipped until its code is added here,
+ * which is the safe direction for a filter whose job is to keep things out.
+ */
+const FIAT_LEGS = new Set([
+  'AED', 'ARS', 'AUD', 'BDT', 'BHD', 'BRL', 'CAD', 'CHF', 'CLP', 'CNH', 'CNY',
+  'COP', 'DZD', 'EGP', 'EUR', 'GBP', 'HUF', 'IDR', 'INR', 'IRR', 'JOD', 'JPY',
+  'KES', 'LBP', 'MAD', 'MXN', 'MYR', 'NGN', 'NOK', 'NZD', 'OMR', 'PHP', 'PKR',
+  'QAR', 'RUB', 'SAR', 'SGD', 'SYP', 'THB', 'TND', 'TRY', 'UAH', 'USD', 'VND',
+  'YER', 'ZAR',
+]);
+
+/** True when this symbol may be subscribed to, stored, or listed anywhere. */
+function isAllowedAsset(symbol) {
+  if (!symbol) return false;
+  const sym = String(symbol).trim();
+  if (ALLOWED_ASSETS.has(sym)) return true;
+
+  const base = sym.replace(/_otc$/i, '');
+  if (!/^[A-Za-z]{6}$/.test(base)) return false;
+  return FIAT_LEGS.has(base.slice(0, 3).toUpperCase())
+      && FIAT_LEGS.has(base.slice(3).toUpperCase());
+}
+
 function ivToSeconds(iv) {
   switch (iv) {
     case '5m':  return 300;
@@ -402,6 +465,10 @@ class CandleStore {
   // not a finer one (a 5m batch can't reconstruct 1m). So only aggregate into
   // timeframes whose seconds >= periodSec. (Unknown period ⇒ treat as 1m = all.)
   seedHistory(symbol, ticks, periodSec) {
+    // PO pushes history for symbols nobody subscribed to. Seeding one would
+    // create four candle series and persist them, which is the exact storage
+    // the policy exists to avoid.
+    if (!isAllowedAsset(symbol)) return 0;
     if (!Array.isArray(ticks) || !ticks.length) return 0;
     const minIvSec = periodSec && periodSec > 0 ? periodSec : 0;
     let changed = 0;
@@ -1487,7 +1554,10 @@ class PoWsClient {
   }
 
   applyEnabled(symbols) {
-    this.enabled = new Set(symbols);
+    // Everything downstream — subscriptions, candle building, the price
+    // snapshot — walks `this.enabled`, so this one filter is what makes a
+    // dropped asset cost nothing anywhere.
+    this.enabled = new Set((symbols || []).filter(isAllowedAsset));
     log(`tracking ${this.enabled.size} enabled OTC pair(s):`, [...this.enabled].join(', ') || '(none)');
     if (this.authed) this._subscribeAll();   // subscribe newly-enabled symbols live
   }
@@ -1545,9 +1615,13 @@ class PoWsClient {
           });
         }
       }
-      log(`scan: found ${found.length} pair(s) (all classes)`);
-      await this._upsertLibrary(found);
-      await this._reportScan({ status: 'done', count: found.length, message: `تم العثور على ${found.length} زوج` });
+      // The catalogue is read whole and then cut down, rather than asking PO
+      // for less — PO sends the lot in one frame either way, and seeing what
+      // was refused is what makes the count in the log meaningful.
+      const kept = found.filter(a => isAllowedAsset(a.symbol));
+      log(`scan: found ${found.length} pair(s), keeping ${kept.length} (dropped ${found.length - kept.length} outside the asset policy)`);
+      await this._upsertLibrary(kept);
+      await this._reportScan({ status: 'done', count: kept.length, message: `تم العثور على ${kept.length} زوج` });
     } catch (e) {
       err('scan failed:', e.message);
       await this._reportScan({ status: 'error', message: e.message });
@@ -1555,8 +1629,13 @@ class PoWsClient {
   }
 
   async _upsertLibrary(assets) {
-    if (!db || !assets.length) return;
-    const rows = assets.map(a => ({
+    if (!db) return;
+    // Filtered again at the write itself. `runScan` already did it, but this is
+    // the function that puts rows in the database, and a second caller added
+    // later must not be able to get a dropped asset in through here.
+    const allowed = assets.filter(a => isAllowedAsset(a.symbol));
+    if (!allowed.length) return;
+    const rows = allowed.map(a => ({
       platform: this.proto.id, symbol: a.symbol,
       name: a.name || this.proto.displayName(a.symbol),
       asset_type: a.type || null,
@@ -1594,7 +1673,15 @@ async function loadEnabledSymbols() {
   if (!db) return [];
   const { data, error } = await db.from('otc_pairs').select('symbol').eq('enabled', true);
   if (error) { err('load enabled:', error.message); return []; }
-  return (data || []).map(r => r.symbol);
+  // A row left enabled from before the policy — or re-enabled by hand in the
+  // admin — must not bring a dropped asset back to life. The DB is not the
+  // authority on what may be scraped; this file is.
+  const all = (data || []).map(r => r.symbol);
+  const allowed = all.filter(isAllowedAsset);
+  if (allowed.length !== all.length) {
+    log(`enabled: ignoring ${all.length - allowed.length} row(s) outside the asset policy`);
+  }
+  return allowed;
 }
 
 // Persist / restore the auto-recaptured token so a restart reuses the freshest
