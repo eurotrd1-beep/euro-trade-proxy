@@ -275,6 +275,72 @@ function enabledSymbols() {
   return [...client.enabled];
 }
 
+/**
+ * ── Only the pairs somebody actually chose ─────────────────────────────────
+ *
+ * The generator used to run the strategy over every symbol the scraper had,
+ * all eighty-nine of them, and write a row for each settled trade. That made
+ * sense while the app watched everything too. It does not now: users pick their
+ * pairs, and a pair nobody picked is one nobody is being alerted about and
+ * nobody is looking at — so evaluating it is work done for a number no screen
+ * shows.
+ *
+ * The list is the union of every subscriber's selection, refreshed on a slow
+ * timer because it changes when somebody opens the settings sheet, which is
+ * rare compared to a candle.
+ *
+ * ── AND WHY IT FALLS BACK ──────────────────────────────────────────────────
+ *
+ * With no subscriptions at all, the union is empty — and an empty union must
+ * NOT mean "analyse nothing". That state is reached on a fresh database, or if
+ * the query fails, and going silent there would stop the statistics with
+ * nothing anywhere reporting why. Empty means "no opinion", so it falls back to
+ * everything the scraper has, exactly as before.
+ */
+let chosenSymbols = null;
+let chosenAt = 0;
+
+/** How long a fetched selection is trusted. A candle is 60s; this is 20 of them. */
+const CHOSEN_TTL_MS = 20 * 60_000;
+
+async function refreshChosen() {
+  if (!db) return;
+  try {
+    const { data, error } = await db
+      .from('push_subscriptions')
+      .select('symbols')
+      .limit(5000);
+    if (error) throw new Error(error.message);
+
+    const union = new Set();
+    for (const row of data || []) {
+      if (Array.isArray(row.symbols)) {
+        for (const sym of row.symbols) if (typeof sym === 'string' && sym) union.add(sym);
+      }
+    }
+    chosenSymbols = union.size > 0 ? union : null;
+    chosenAt = Date.now();
+    log(
+      chosenSymbols
+        ? `بيحلّل ${chosenSymbols.size} زوج — اللي المشتركين اختاروهم`
+        : 'مفيش اشتراكات — بيحلّل كل الأزواج',
+    );
+  } catch (e) {
+    // Left as it was. A failed read is not a reason to change what is analysed.
+    err('تعذّرت قراءة الأزواج المختارة:', e.message);
+  }
+}
+
+/** The symbols to run the strategy over on this tick. */
+function symbolsToAnalyse() {
+  const all = enabledSymbols();
+  if (Date.now() - chosenAt > CHOSEN_TTL_MS) void refreshChosen();
+  if (chosenSymbols === null) return all;
+  // Intersected with what the scraper actually has, so a pair chosen before the
+  // asset policy removed it does not become a symbol with no candles.
+  return all.filter((sym) => chosenSymbols.has(sym));
+}
+
 /** The scraper's compact candle → the shape the engine expects. */
 function toEngine(c) {
   return {
@@ -306,7 +372,7 @@ function lastClosed(candles) {
 }
 
 function tick() {
-  const symbols = enabledSymbols();
+  const symbols = symbolsToAnalyse();
   if (symbols.length === 0) return;
 
   for (const symbol of symbols) {
