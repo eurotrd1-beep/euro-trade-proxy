@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80
+// engine-source-sha256: 8134edf38a28c892f2b31b31dcd5c2c3fc2325c68d0e67d763454fd53cc3bec1
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -81,6 +81,7 @@ __export(src_exports, {
   scoreStandard: () => scoreStandard,
   scoreV2: () => scoreV2,
   setupCompletion: () => setupCompletion,
+  setupProgress: () => setupProgress,
   sma: () => sma,
   stochastic: () => stochastic,
   strategyConfigFromJson: () => strategyConfigFromJson,
@@ -1410,6 +1411,34 @@ function setupCompletion(armed, price) {
   if (!(leg > 0)) return 0;
   return Math.max(0, Math.min(1, 1 - Math.abs(price - armed.level) / leg));
 }
+var BAND = {
+  pivots: 15,
+  rejected: 30,
+  armed: 50,
+  /** The top of the armed band. The last 5 belong to the touch itself. */
+  armedTop: 95
+};
+function setupProgress(state, diagnostics, price) {
+  if (state.cycle !== null) return { stage: "fired", percent: 100 };
+  if (state.armed !== null) {
+    const closeness = setupCompletion(state.armed, price);
+    return {
+      stage: "armed",
+      percent: BAND.armed + closeness * (BAND.armedTop - BAND.armed)
+    };
+  }
+  if (diagnostics === null) return { stage: "idle", percent: 0 };
+  const refused = diagnostics.rejectedSwingTouched + diagnostics.rejectedBroken + diagnostics.rejectedAlreadyFired;
+  if (refused > 0) {
+    const share = Math.min(1, refused / 3);
+    return { stage: "rejected", percent: BAND.rejected + share * (BAND.armed - BAND.rejected) };
+  }
+  if (diagnostics.pairsExamined > 0) {
+    const share = Math.min(1, diagnostics.pairsExamined / 4);
+    return { stage: "pivots", percent: BAND.pivots + share * (BAND.rejected - BAND.pivots) };
+  }
+  return { stage: "idle", percent: 0 };
+}
 
 // packages/engine/src/programs/index.ts
 var PROGRAMS = [fib236Touch];
@@ -1498,6 +1527,7 @@ function programFor(id) {
   scoreStandard,
   scoreV2,
   setupCompletion,
+  setupProgress,
   sma,
   stochastic,
   strategyConfigFromJson,
@@ -1512,5 +1542,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80";
+module.exports.BUNDLE_SOURCE_HASH = "8134edf38a28c892f2b31b31dcd5c2c3fc2325c68d0e67d763454fd53cc3bec1";
 
