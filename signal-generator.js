@@ -12,6 +12,30 @@
  * app open for — a biased sample, not a measurement. So the engine runs here
  * instead, on every enabled pair, independent of whether anyone is watching.
  *
+ * ── IT RUNS THE PROGRAM, NOT A RULE FILE ───────────────────────────────────
+ *
+ * It used to load a rule strategy per slot out of `strategy_versions` and score
+ * it with `evaluateStrategyPro`. Neither exists any more: the pyramid was
+ * removed, and strategies stopped being data — they are programs compiled into
+ * the engine bundle this file requires. So it drives `fib_236_touch` exactly as
+ * the app does, one closed candle at a time, and the plan → program map is the
+ * single place that decides which plan runs which.
+ *
+ * That change carries three consequences worth stating plainly:
+ *
+ *   • ONE MINUTE, not fifteen. The program is defined on 1m candles and its
+ *     trades are one candle long. Running it on 15m would not be a slower
+ *     version of the same strategy; it would be a different one.
+ *   • A ROW IS WRITTEN WHEN THE TRADE SETTLES, not when it opens. The program
+ *     settles from the trade's own candle — its open in, its close out — and
+ *     both numbers only exist once that candle has closed. Writing earlier
+ *     meant recording an entry price the strategy never used. The cost is a
+ *     process restart mid-trade losing that one trade, which `bar_time`
+ *     de-duplication used to cover and no longer can.
+ *   • `slot` now means plan × stage: `instant_*` is the primary trade and
+ *     `monitoring_*` is the martingale that followed a loss. That is the split
+ *     that matters for a strategy with a double in it.
+ *
  * ── THE CONSTRAINTS THAT SHAPED IT ─────────────────────────────────────────
  *
  * READS NOTHING FROM SUPABASE IN STEADY STATE. Candles come from the scraper's
@@ -20,7 +44,7 @@
  * of candle rows once burned 5.6GB of egress in two days; that mistake is not
  * repeated. The only reads are: a 4-row hash check every 5 minutes (~400 bytes,
  * and the full strategy JSON only when a hash actually changes), and ONE query
- * at boot to recover signals left pending by a restart.
+ * at boot to sweep up rows a crash left behind.
  *
  * WRITES IN BATCHES. One RPC a minute, never a row at a time.
  *
@@ -38,28 +62,46 @@ const engine = require('./engine.bundle.js');
 // ── Configuration ───────────────────────────────────────────────────────────
 
 /**
- * 15m, and not for cost.
+ * The plans, and which slot each of their trades is recorded under.
  *
- * A 15m window spans all 24 hours, so clock-dependent indicators (kill_zone,
- * session, judas_swing…) are judged against a full day. 5m candles from this
- * feed span about 8 hours — an indicator scored on that is scored on one
- * session and the number means nothing. That mistake has already been made
- * once here, on a three-hour window.
+ * Both plans resolve to the same program today, and both are still evaluated
+ * separately rather than evaluated once and copied: the day they differ,
+ * nothing here changes.
  */
-const TIMEFRAME = '15m';
-const STEP_SECONDS = 900;
+const PLANS = [
+  { plan: 'free', primarySlot: 'instant_free', martingaleSlot: 'monitoring_free' },
+  { plan: 'paid', primarySlot: 'instant_paid', martingaleSlot: 'monitoring_paid' },
+];
 
-/** Candles the engine needs before its indicators are meaningful. */
-const WARMUP = 55;
+/** The program every plan runs — read from the engine, never assumed. */
+const PROGRAM = engine.programForPlan('free');
 
-/** How long a trade runs. One candle, matching the backtester's default. */
-const EXPIRY_SECONDS = STEP_SECONDS;
+/**
+ * The timeframe is the PROGRAM's, not a choice made here.
+ *
+ * It used to be 15m, chosen so that clock-reading indicators saw a whole day.
+ * Those indicators are gone, and this one is defined on one-minute candles.
+ */
+const TIMEFRAME = PROGRAM.timeframe;
+const STEP_SECONDS = 60;
 
-const SLOTS = ['instant_free', 'instant_paid', 'monitoring_free', 'monitoring_paid'];
+/**
+ * Candles before the program is even asked.
+ *
+ * The program enforces its own minimum — it refuses until twelve candles sit
+ * behind the one it is judging — so this only avoids pointless calls. Set
+ * higher and a pair with a short history is skipped for no reason, which is
+ * how the first version of this managed to arm and touch on the same candle
+ * and produce nothing at all.
+ */
+const WARMUP = 12;
 
-const TICK_MS = 20_000;          // how often we look for a newly closed candle
+/** How long a trade runs — the program's, again. */
+const EXPIRY_SECONDS = PROGRAM.durationMinutes * 60;
+
+
+const TICK_MS = 10_000;          // how often we look for a newly closed candle
 const FLUSH_MS = 60_000;         // how often the buffer is written
-const VERSION_POLL_MS = 300_000; // hash-only check for a new strategy version
 const ROLLUP_MS = 600_000;       // refresh the daily aggregate
 const PRUNE_MS = 6 * 3600_000;   // drop raw rows past the retention window
 const KEEP_DAYS = 30;
@@ -103,94 +145,45 @@ function alert(text) {
 
 // ── State ───────────────────────────────────────────────────────────────────
 
-/** slot → { id, versionNumber, hash, strategy } */
-const active = new Map();
-/** `${slot}|${symbol}` → bar_time seconds already evaluated, so a restart or a
- *  slow tick never scores the same candle twice. */
-const lastBar = new Map();
+/**
+ * `${plan}|${symbol}` → the program's state for that pair.
+ *
+ * In memory only. An armed setup rebuilds itself from the candles within a
+ * couple of closes, and an open cycle that a restart interrupts loses one
+ * trade — which is the price of recording exact prices rather than guessed
+ * ones. See the note at the top.
+ */
+const programStates = new Map();
+
 /** Rows waiting to be written. */
 let buffer = [];
-/** id → { symbol, entryPrice, expiresAt } — what is waiting for a price. */
-const pending = new Map();
+
+/**
+ * `symbol|expiresAtMs` → { price, outcome } as the program settled it.
+ *
+ * The insert returns ids but not the result, and the two have to be matched
+ * back up to resolve in the same pass. Entry time plus symbol is unique — one
+ * trade per pair per candle is the whole design — so it is enough of a key.
+ *
+ * The OUTCOME travels with the price on purpose. The database used to work it
+ * out again from entry and exit, with a stricter idea of a tie than the engine
+ * has, so a close inside the engine's tolerance was a tie to the strategy and
+ * a win to the statistics. It is decided once now, here, by the same call that
+ * decided whether a martingale followed.
+ */
+const exits = new Map();
 
 let cappedToday = false;
 let stats = { evaluated: 0, signals: 0, written: 0, duplicates: 0, resolved: 0, unresolved: 0 };
 
-// ── Strategy versions ───────────────────────────────────────────────────────
-
-/**
- * Cheap by design: reads four short columns, and only pulls the full strategy
- * JSON for a slot whose hash actually moved. A version changes maybe weekly, so
- * this is a few hundred bytes every five minutes.
- */
-async function refreshVersions() {
-  if (!db) return;
-  try {
-    const { data, error } = await db
-      .from('strategy_versions')
-      .select('id, slot, version_number, json_hash')
-      .eq('is_active', true);
-    if (error) throw new Error(error.message);
-
-    for (const row of data ?? []) {
-      const current = active.get(row.slot);
-      if (current && current.hash === row.json_hash) continue;
-
-      const { data: full, error: e2 } = await db
-        .from('strategy_versions')
-        .select('strategy_json')
-        .eq('id', row.id)
-        .single();
-      if (e2) throw new Error(e2.message);
-
-      const parsed = parseStrategy(full.strategy_json);
-      if (!parsed) {
-        err(`slot ${row.slot} نسخة ${row.version_number}: قواعد غير صالحة — اتجاهلت`);
-        continue;
-      }
-      active.set(row.slot, {
-        id: row.id,
-        versionNumber: row.version_number,
-        hash: row.json_hash,
-        strategy: parsed,
-      });
-      // A slot that changed strategy must not inherit the old one's cooldown.
-      for (const key of [...lastBar.keys()]) {
-        if (key.startsWith(`${row.slot}|`)) lastBar.delete(key);
-      }
-      log(`slot ${row.slot} → نسخة ${row.version_number} (${parsed.rules.length} قاعدة)`);
-    }
-
-    // A slot whose version was deactivated stops producing. It does NOT fall
-    // back to the previous one: a signal attributed to a version that is no
-    // longer live is a lie in the statistics.
-    const live = new Set((data ?? []).map((r) => r.slot));
-    for (const slot of [...active.keys()]) {
-      if (!live.has(slot)) {
-        active.delete(slot);
-        log(`slot ${slot} مالوش نسخة نشطة — التوليد وقف`);
-      }
-    }
-  } catch (e) {
-    err('refreshVersions:', e.message);
+function stateFor(plan, symbol) {
+  const key = `${plan}|${symbol}`;
+  let held = programStates.get(key);
+  if (held === undefined) {
+    held = PROGRAM.init();
+    programStates.set(key, held);
   }
-}
-
-function parseStrategy(json) {
-  if (!json || !Array.isArray(json.rules)) return null;
-  const rules = json.rules
-    .filter((r) => r && typeof r.indicator === 'string')
-    .map((r) => engine.ruleFromJson(r));
-  if (rules.length === 0) return null;
-  return {
-    name: typeof json.name === 'string' ? json.name : 'Untitled',
-    minScore: Number(json.min_score) || 0,
-    maxScore: Number(json.max_score) || 0,
-    confidenceBase: Number(json.confidence_base) || 92.5,
-    confidenceMax: Number(json.confidence_max) || 98.9,
-    pyramid: json.pyramid ? engine.pyramidFromJson(json.pyramid) : null,
-    rules,
-  };
+  return held;
 }
 
 // ── Candles, from memory only ───────────────────────────────────────────────
@@ -220,116 +213,121 @@ function toEngine(c) {
 
 // ── Evaluation ──────────────────────────────────────────────────────────────
 
+/**
+ * One pass over every enabled pair, for every plan.
+ *
+ * The program is handed the store's candles as they are, plus the wall clock.
+ * It works out which candle has closed and refuses to read the one still
+ * forming — the same call the app makes, so this process cannot reach a
+ * different conclusion from a user's device on the same data.
+ */
+/** The newest candle that has actually closed — the one the program just read. */
+function lastClosed(candles) {
+  const now = Date.now();
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].time + STEP_SECONDS * 1000 <= now) return candles[i];
+  }
+  return null;
+}
+
 function tick() {
-  if (active.size === 0) return;
+  const symbols = enabledSymbols();
+  if (symbols.length === 0) return;
 
-  const nowSec = Math.floor(Date.now() / 1000);
-  // The last CLOSED bar. The newest element of the store is still forming, and
-  // scoring a half-built candle produces a signal that disagrees with itself
-  // fifteen minutes later.
-  const closedAt = Math.floor(nowSec / STEP_SECONDS) * STEP_SECONDS - STEP_SECONDS;
-
-  for (const symbol of enabledSymbols()) {
+  for (const symbol of symbols) {
     const raw = storeFor(symbol);
     if (!raw || raw.length < WARMUP + 2) continue;
 
-    const idx = raw.findIndex((c) => c.t === closedAt);
-    if (idx < WARMUP) continue;
+    const candles = raw.map(toEngine);
 
-    // Only the bars up to and including the closed one. Nothing after it exists
-    // as far as this evaluation is concerned.
-    const window = raw.slice(0, idx + 1).map(toEngine);
-    const current = window[window.length - 1];
-    const clock = clockFor(current.time);
-
-    for (const [slot, version] of active) {
-      const key = `${slot}|${symbol}`;
-      if (lastBar.get(key) === closedAt) continue;
-      lastBar.set(key, closedAt);
+    for (const { plan, primarySlot, martingaleSlot } of PLANS) {
+      const state = stateFor(plan, symbol);
       stats.evaluated++;
 
-      let pro;
+      let event;
       try {
-        // One cache per (symbol, bar) shared across slots: two strategies
-        // asking for rsi(14) on the same window get one computation.
-        pro = engine.evaluateStrategyPro(version.strategy, {
-          candles: window,
-          currentPrice: current.close,
-          clock,
-          cache: new Map(),
-        });
+        event = PROGRAM.onCandleClose(
+          { candles, timeframeMs: STEP_SECONDS * 1000, now: Date.now() },
+          state,
+        );
       } catch (e) {
-        err(`${symbol} ${slot}:`, e.message);
+        err(`${symbol} ${plan}:`, e.message);
         continue;
       }
-      if (pro.result !== 'SIGNAL' || !pro.direction) continue;
 
-      stats.signals++;
-      buffer.push(buildRow(symbol, slot, version, pro, window, closedAt));
+      // A trade is recorded when it SETTLES, with the two prices the program
+      // actually used — its candle's open and close. Before that moment the
+      // entry price does not exist yet, and writing the previous close in its
+      // place would record a trade at a price the strategy never took.
+      if (event.settled !== null) {
+        stats.signals++;
+        // The trade ran on the candle that just closed — found by time, not by
+        // matching prices back, which would pick the wrong bar the moment two
+        // candles happened to share an open and a close.
+        const bar = lastClosed(candles);
+        if (bar === null) continue;
+        buffer.push(
+          buildRow(
+            symbol,
+            event.settled.stage === 'martingale' ? martingaleSlot : primarySlot,
+            event.settled,
+            candles,
+            state,
+            bar,
+          ),
+        );
+        exits.set(`${symbol}|${bar.time + EXPIRY_SECONDS * 1000}`, {
+          price: event.settled.exitPrice,
+          outcome: event.settled.result.toLowerCase(),
+        });
+      }
     }
   }
 }
 
-/** Dart's clock convention: UTC hour, but LOCAL weekday (Mon=1 … Sun=7). */
-function clockFor(ms) {
-  const d = new Date(ms);
-  const jsDay = d.getDay();
-  return { utcHour: d.getUTCHours(), weekday: jsDay === 0 ? 7 : jsDay };
-}
+/**
+ * One settled trade, as a row.
+ *
+ * `rules_matched` keeps its shape — the admin screen renders it as a list —
+ * but there are no rules to list any more. What goes in instead is what makes
+ * this trade diagnosable six weeks later: the level it was waiting for, the
+ * leg that produced it, and which half of the cycle this was.
+ */
+function buildRow(symbol, slot, settled, candles, state, bar) {
 
-function buildRow(symbol, slot, version, pro, window, barTime) {
-  const current = window[window.length - 1];
-
-  // Which rules were true, and what they read. This is what makes a losing
-  // signal diagnosable six weeks later instead of just a red row.
-  const matched = [];
-  for (const rule of version.strategy.rules) {
-    if (!rule.enabled) continue;
-    try {
-      const value = engine.computeIndicator(window, rule, current.close, clockFor(current.time), new Map());
-      matched.push({
-        i: rule.indicator,
-        r: rule.role || 'base',
-        v: typeof value === 'number' ? Number(value.toFixed(6)) : value,
-        ok: engine.checkCondition(rule, value === undefined ? 0 : value),
-      });
-    } catch {
-      matched.push({ i: rule.indicator, r: rule.role || 'base', v: null, ok: false });
-    }
+  const armed = state.armed;
+  const detail = [
+    { i: PROGRAM.id, r: 'program', v: null, ok: true },
+    { i: 'stage', r: settled.stage, v: null, ok: true },
+    { i: 'entry_open', r: 'price', v: Number(settled.entryPrice.toFixed(6)), ok: true },
+    { i: 'exit_close', r: 'price', v: Number(settled.exitPrice.toFixed(6)), ok: true },
+  ];
+  if (armed) {
+    detail.push({ i: 'fib_level', r: 'level', v: Number(armed.level.toFixed(6)), ok: true });
   }
 
-  // Five candles as flat numbers, not objects: [o,h,l,c,t] × 5.
   const snapshot = [];
-  for (const c of window.slice(-5)) {
+  for (const c of candles.slice(-5)) {
     snapshot.push(c.open, c.high, c.low, c.close, Math.floor(c.time / 1000));
   }
-
-  const winning = pro.direction === 'CALL' ? pro.finalScore.CALL : pro.finalScore.PUT;
 
   return {
     symbol,
     timeframe: TIMEFRAME,
-    direction: pro.direction,
-    bar_time: new Date(barTime * 1000).toISOString(),
-    strategy_version_id: version.id,
+    direction: settled.direction,
+    bar_time: new Date(bar.time).toISOString(),
+    // No version row to point at: the strategy is the code, and the build it
+    // came from is stamped on the bundle rather than stored per signal.
+    strategy_version_id: null,
     slot,
-    // Same formula the app shows the user, from the same function.
-    confidence: Number(
-      engine
-        .confidenceFor(
-          Math.abs(winning),
-          version.strategy.confidenceBase,
-          version.strategy.confidenceMax,
-        )
-        .toFixed(2),
-    ),
-    score: Number(winning.toFixed(3)),
-    rules_matched: matched,
+    confidence: PROGRAM.confidence,
+    // A touch happened or it did not. There is no score behind it, and
+    // inventing one would put a fabricated number in the statistics.
+    score: 0,
+    rules_matched: detail,
     candle_snapshot: snapshot,
-    entry_price: current.close,
+    entry_price: settled.entryPrice,
     expiry_seconds: EXPIRY_SECONDS,
-    // The generator never forces an outcome. `forced` exists for the admin's
-    // guaranteed_win path, which lives on the client and is not recorded here.
     forced: false,
   };
 }
@@ -361,13 +359,18 @@ async function flush() {
       return;
     }
 
+    // Every row written here is already finished — see the note at the top —
+    // so it is resolved in the same pass, with the exit the program settled on.
+    // Nothing is left pending for a ticker to guess at later.
+    const resolveRows = [];
     for (const row of r.ids ?? []) {
-      pending.set(row.id, {
-        symbol: row.symbol,
-        entryPrice: row.entry_price,
-        expiresAt: new Date(row.expires_at).getTime(),
-      });
+      const key = `${row.symbol}|${new Date(row.expires_at).getTime()}`;
+      const settled = exits.get(key);
+      if (settled === undefined) continue;
+      exits.delete(key);
+      resolveRows.push({ id: row.id, price: settled.price, outcome: settled.outcome });
     }
+    if (resolveRows.length > 0) await resolveNow(resolveRows);
   } catch (e) {
     err('flush:', e.message);
     // Put them back — a failed write must not silently lose signals. Capped at
@@ -379,67 +382,82 @@ async function flush() {
 // ── Settling ────────────────────────────────────────────────────────────────
 
 /**
- * The price at expiry, or null. Null is a real answer here.
+ * Records the outcome for rows just inserted.
  *
- * `global.otcPrices` is the scraper's own snapshot, refreshed about every
- * 700ms. A reading that is stale, or for a market the feed says is closed, is
- * not a price — and inventing one would put a fabricated number into the
- * statistics, which is the one thing this whole exercise exists to avoid.
+ * The exit price is the close of the trade's own candle — the number the
+ * program settled on — not a ticker reading taken whenever this code happened
+ * to run. That is what keeps one truth: the outcome in the database and the
+ * outcome that decided whether a martingale followed are the same event.
+ *
+ * One known seam, stated rather than hidden: `resolve_signals` calls a tie on
+ * exact equality, while the engine allows a hair of tolerance
+ * (`tieEpsilon`, 0.0005% of the entry). A close that lands inside that band is
+ * a tie to the strategy and a win or a loss to the statistics. Closing it needs
+ * the outcome to be passed in rather than recomputed, which is a migration.
  */
-function priceFor(symbol) {
-  const snap = global.otcPrices && global.otcPrices[symbol];
-  if (!snap || typeof snap.p !== 'number' || snap.p <= 0) return null;
-  if (snap.st !== 'live') return null;
-  if (typeof snap.t === 'number' && Date.now() - snap.t * 1000 > PRICE_MAX_AGE_MS) return null;
-  return snap.p;
-}
-
-async function settle() {
-  if (!db || pending.size === 0) return;
-
-  const now = Date.now();
-  const rows = [];
-  for (const [id, p] of pending) {
-    if (p.expiresAt > now) continue;
-    const price = priceFor(p.symbol);
-    rows.push({ id, price });
-    pending.delete(id);
-    if (price === null) stats.unresolved++;
-    else stats.resolved++;
-  }
-  if (rows.length === 0) return;
-
+async function resolveNow(rows) {
+  if (!db || rows.length === 0) return;
   try {
     const { error } = await db.rpc('resolve_signals', { p_rows: rows });
     if (error) throw new Error(error.message);
+    stats.resolved += rows.length;
   } catch (e) {
-    err('settle:', e.message);
-    // Back into the map so the next pass retries. The price is read again then,
-    // which is correct: a later reading is no less valid than this one.
-    for (const r of rows) {
-      if (!pending.has(r.id)) {
-        pending.set(r.id, { symbol: '', entryPrice: 0, expiresAt: 0 });
-      }
-    }
+    err('resolve:', e.message);
   }
 }
 
-/** One read, at boot, so a restart does not strand rows as pending forever. */
-async function recoverPending() {
+/**
+ * Rows a crash left behind.
+ *
+ * Nothing writes `pending` in normal operation any more — a row is inserted
+ * and resolved in the same pass. What this catches is the process dying
+ * between the two, which would otherwise leave a row pending for ever and drag
+ * the statistics down with it. The exit comes from the trade's own candle if
+ * the store still holds it, and the row is marked unresolved if it does not:
+ * "no price" is a fourth state and must never be recorded as a tie.
+ */
+async function sweepStranded() {
   if (!db) return;
   try {
-    const { data, error } = await db.rpc('pending_signals');
+    // Read directly rather than through `pending_signals`: the direction is
+    // needed to settle, and the outcome has to come from `outcomeFor` like
+    // everywhere else. A row read without its direction could only be settled
+    // by a second implementation of the rule.
+    const { data, error } = await db
+      .from('signals')
+      .select('id, symbol, direction, entry_price, bar_time, expiry_seconds')
+      .eq('outcome', 'pending')
+      .limit(500);
     if (error) throw new Error(error.message);
+
+    const rows = [];
     for (const row of data ?? []) {
-      pending.set(row.id, {
-        symbol: row.symbol,
-        entryPrice: row.entry_price,
-        expiresAt: new Date(row.expires_at).getTime(),
+      const barTime = new Date(row.bar_time).getTime();
+      const expiresAt = barTime + (row.expiry_seconds || EXPIRY_SECONDS) * 1000;
+      if (expiresAt > Date.now()) continue; // still running
+
+      const raw = storeFor(row.symbol);
+      const bar = raw && raw.find((c) => c.t * 1000 === barTime);
+      if (!bar) {
+        // "No price" is a fourth state. Recording it as a tie would inflate
+        // ties and nobody would ever find out why.
+        rows.push({ id: row.id, price: null, outcome: null });
+        stats.unresolved++;
+        continue;
+      }
+      rows.push({
+        id: row.id,
+        price: bar.c,
+        outcome: engine.outcomeFor(row.direction, row.entry_price, bar.c).toLowerCase(),
       });
     }
-    if (pending.size > 0) log(`استرجعت ${pending.size} إشارة معلّقة بعد إعادة التشغيل`);
+
+    if (rows.length > 0) {
+      await resolveNow(rows);
+      log(`سوّيت ${rows.length} إشارة كانت معلّقة بعد انقطاع`);
+    }
   } catch (e) {
-    err('recoverPending:', e.message);
+    err('sweepStranded:', e.message);
   }
 }
 
@@ -474,7 +492,7 @@ function report() {
   log(
     `تقييم ${stats.evaluated} · إشارات ${stats.signals} · مكتوب ${stats.written} · ` +
       `مكرر ${stats.duplicates} · نتايج ${stats.resolved} · بدون سعر ${stats.unresolved} · ` +
-      `معلّق ${pending.size}`,
+      `أزواج متراقبة ${programStates.size}`,
   );
   stats = { evaluated: 0, signals: 0, written: 0, duplicates: 0, resolved: 0, unresolved: 0 };
 }
@@ -506,12 +524,13 @@ async function start() {
     `بيشتغل على ${TIMEFRAME} · إحماء ${WARMUP} شمعة · انتهاء ${EXPIRY_SECONDS}s · ` +
       `بصمة المحرك ${(engine.BUNDLE_SOURCE_HASH || 'غير معروفة').slice(0, 16)}…`,
   );
-  await refreshVersions();
-  await recoverPending();
+  await sweepStranded();
 
   setInterval(() => { rolloverCheck(); tick(); }, TICK_MS);
-  setInterval(() => { void flush(); void settle(); }, FLUSH_MS);
-  setInterval(() => { void refreshVersions(); }, VERSION_POLL_MS);
+  setInterval(() => { void flush(); }, FLUSH_MS);
+  // Only for rows a crash stranded between insert and resolve. In normal
+  // operation `flush` resolves what it writes, so this finds nothing.
+  setInterval(() => { void sweepStranded(); }, 600_000);
   setInterval(() => { void rollup(); }, ROLLUP_MS);
   setInterval(() => { void prune(); }, PRUNE_MS);
   setInterval(report, 3600_000);
@@ -521,7 +540,20 @@ async function start() {
   setTimeout(() => { void rollup(); }, 30_000);
 }
 
-module.exports = { start, TIMEFRAME, EXPIRY_SECONDS };
+module.exports = {
+  start, TIMEFRAME, EXPIRY_SECONDS, PROGRAM,
+  // Exposed for the harness in test/: the only way to prove this process
+  // reaches the same conclusion as the app is to run its own tick and compare,
+  // and a test that reimplements the loop proves nothing about the loop.
+  __test: {
+    tick,
+    buildRow,
+    takeBuffer: () => { const b = buffer; buffer = []; return b; },
+    // Module state outlives a single run, so a harness that replays twice sees
+    // the second pass do nothing at all. Resetting is the harness's job.
+    reset: () => { programStates.clear(); exits.clear(); buffer = []; },
+  },
+};
 
 // Auto-start, like the other subsystems. A throw in here must never take the
 // scraper or the API host down with it.
