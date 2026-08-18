@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: f1e448cc7e885dfe6a1b1956f8404b596ffd4e9f4b186a6eda0ee5b405948e1f
+// engine-source-sha256: fd6416cc2076be077d3e2aaf74fcd2da0f1b711389ff2b3337f1b7b178cbfac0
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -29,6 +29,8 @@ __export(src_exports, {
   DEFAULT_STRATEGY_CONFIG: () => DEFAULT_STRATEGY_CONFIG,
   FIB_LEVELS: () => FIB_LEVELS,
   NO_EVENT: () => NO_EVENT,
+  SUPPORTED_TIMEFRAMES: () => SUPPORTED_TIMEFRAMES,
+  TIMEFRAME_MINUTES: () => TIMEFRAME_MINUTES,
   VOLUME_DEAD: () => VOLUME_DEAD,
   VOLUME_DEGRADES_TO_PRICE: () => VOLUME_DEGRADES_TO_PRICE,
   VOLUME_DEPENDENT: () => VOLUME_DEPENDENT,
@@ -67,6 +69,7 @@ __export(src_exports, {
   outcomeFor: () => outcomeFor,
   programFor: () => programFor,
   programForPlan: () => programForPlan,
+  programOnTimeframe: () => programOnTimeframe,
   registeredNames: () => registeredNames,
   registeredNamesInOrder: () => registeredNamesInOrder,
   registeredPrograms: () => registeredPrograms,
@@ -1407,8 +1410,19 @@ var BY_PLAN = {
   free: fib236Touch,
   paid: fib236Touch
 };
-function programForPlan(plan) {
-  return BY_PLAN[plan];
+var TIMEFRAME_MINUTES = {
+  "1m": 1,
+  "5m": 5
+};
+var SUPPORTED_TIMEFRAMES = ["1m", "5m"];
+function programOnTimeframe(program, timeframe) {
+  const minutes = TIMEFRAME_MINUTES[timeframe];
+  if (minutes === void 0 || timeframe === program.timeframe) return program;
+  return { ...program, timeframe, durationMinutes: minutes };
+}
+function programForPlan(plan, timeframe) {
+  const program = BY_PLAN[plan];
+  return timeframe === void 0 ? program : programOnTimeframe(program, timeframe);
 }
 function registeredPrograms() {
   return PROGRAMS;
@@ -1424,6 +1438,8 @@ function programFor(id) {
   DEFAULT_STRATEGY_CONFIG,
   FIB_LEVELS,
   NO_EVENT,
+  SUPPORTED_TIMEFRAMES,
+  TIMEFRAME_MINUTES,
   VOLUME_DEAD,
   VOLUME_DEGRADES_TO_PRICE,
   VOLUME_DEPENDENT,
@@ -1462,6 +1478,7 @@ function programFor(id) {
   outcomeFor,
   programFor,
   programForPlan,
+  programOnTimeframe,
   registeredNames,
   registeredNamesInOrder,
   registeredPrograms,
@@ -1486,5 +1503,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "f1e448cc7e885dfe6a1b1956f8404b596ffd4e9f4b186a6eda0ee5b405948e1f";
+module.exports.BUNDLE_SOURCE_HASH = "fd6416cc2076be077d3e2aaf74fcd2da0f1b711389ff2b3337f1b7b178cbfac0";
 
