@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 8134edf38a28c892f2b31b31dcd5c2c3fc2325c68d0e67d763454fd53cc3bec1
+// engine-source-sha256: 7a84cc3c585084be07d2cc87eb1c1118734a34c31c503a28d542e1db839a5482
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -1415,16 +1415,35 @@ var BAND = {
   pivots: 15,
   rejected: 30,
   armed: 50,
-  /** The top of the armed band. The last 5 belong to the touch itself. */
-  armedTop: 95
+  /**
+   * The top of the approach — everything below a touch.
+   *
+   * 99.9 rather than a round number, and deliberately never reached: the last
+   * tenth belongs to the touch, and a bar that shows 100 before one has
+   * happened would be claiming a trade the strategy has not been given.
+   */
+  armedTop: 99.9
 };
-function setupProgress(state, diagnostics, price) {
+function setupProgress(state, diagnostics, price, touchedThisCandle = false) {
   if (state.cycle !== null) return { stage: "fired", percent: 100 };
   if (state.armed !== null) {
+    const gap = Math.abs(state.armed.level - price);
+    if (touchedThisCandle) {
+      return {
+        stage: "armed",
+        percent: 100,
+        level: state.armed.level,
+        direction: state.armed.direction,
+        gap: 0
+      };
+    }
     const closeness = setupCompletion(state.armed, price);
     return {
       stage: "armed",
-      percent: BAND.armed + closeness * (BAND.armedTop - BAND.armed)
+      percent: BAND.armed + closeness * (BAND.armedTop - BAND.armed),
+      level: state.armed.level,
+      direction: state.armed.direction,
+      gap
     };
   }
   if (diagnostics === null) return { stage: "idle", percent: 0 };
@@ -1542,5 +1561,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "8134edf38a28c892f2b31b31dcd5c2c3fc2325c68d0e67d763454fd53cc3bec1";
+module.exports.BUNDLE_SOURCE_HASH = "7a84cc3c585084be07d2cc87eb1c1118734a34c31c503a28d542e1db839a5482";
 

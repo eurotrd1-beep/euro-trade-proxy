@@ -427,13 +427,22 @@ function tick() {
           // Keyed by the setup, so one opportunity is announced once however
           // long it hovers at the threshold — and a NEW setup on the same pair
           // later is a new opportunity and is announced again.
-          if (pct >= NEAR_THRESHOLD && announced.get(symbol) !== key) {
+          // A touch is the last condition and it cannot be undone: the candle
+          // records it in its high or low, so the trade is owed from the moment
+          // price reaches the level whatever it does afterwards. That is a
+          // promise worth making. Short of it, the honest word is "nearly".
+          const touched =
+            last && (armed.direction === 'CALL' ? last.c <= armed.level : last.c >= armed.level);
+
+          if ((touched || pct >= NEAR_THRESHOLD) && announced.get(symbol) !== key) {
             announced.set(symbol, key);
             announce(
               symbol,
               'armed',
               'custom',
-              `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · قرّب ${pct.toFixed(0)}% · مستنيين ${armed.level.toFixed(5)}`,
+              touched
+                ? `${armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · لمس ${armed.level.toFixed(5)} · الصفقة هتبدأ الشمعة الجاية`
+                : `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · أغلب الشروط اتحققت (${pct.toFixed(0)}%) · جهّز نفسك`,
             );
           }
         } else {
