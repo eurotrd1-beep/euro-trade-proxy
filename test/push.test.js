@@ -78,50 +78,92 @@ test('is ready once both halves of the key are present', () => {
   assert.equal(push.publicKey(), keys.publicKey);
 });
 
-test('sends to a subscriber who asked for every pair', async () => {
-  // `null` symbols is the default and means everything — including pairs added
-  // to the catalogue after they subscribed.
-  const db = fakeDb([sub('https://push.test/all', null)]);
-  const seen = [];
-  const r = await withSend(
-    async (s) => { seen.push(s.endpoint); },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'ANYTHING_otc' }),
-  );
-  assert.deepEqual(seen, ['https://push.test/all']);
-  assert.equal(r.sent, 1);
-});
+/*
+ * The two channels.
+ *
+ * A subscription is in one channel PER PAIR, not as a whole: someone who
+ * picked EURUSD is in the custom channel for EURUSD and in the general one for
+ * the other 88. Getting this backwards in either direction is bad in a way
+ * nobody reports — either a pair somebody explicitly asked about goes quiet,
+ * or the flood of one notification per pair that the leader exists to stop
+ * comes straight back.
+ */
 
-test('sends only the pairs a subscriber chose', async () => {
+test('custom: reaches only the subscribers who named the pair', async () => {
   const db = fakeDb([
     sub('https://push.test/eur', ['EURUSD_otc']),
     sub('https://push.test/gbp', ['GBPUSD_otc']),
+    sub('https://push.test/none', null),
   ]);
   const seen = [];
   await withSend(
     async (s) => { seen.push(s.endpoint); },
-    () => push.broadcast(db, { kind: 'armed', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'armed', channel: 'custom', symbol: 'EURUSD_otc' }),
   );
   assert.deepEqual(seen, ['https://push.test/eur']);
 });
 
-test('an empty selection means nothing, not everything', async () => {
-  // The distinction the whole filter turns on. A user who deselected every
-  // pair must go quiet; folding `[]` into "no filter" would send them the lot.
-  const db = fakeDb([sub('https://push.test/none', [])]);
+test('general: reaches everyone who did NOT name the pair', async () => {
+  const db = fakeDb([
+    sub('https://push.test/eur', ['EURUSD_otc']),
+    sub('https://push.test/gbp', ['GBPUSD_otc']),
+    sub('https://push.test/none', null),
+  ]);
   const seen = [];
-  const r = await withSend(
+  await withSend(
     async (s) => { seen.push(s.endpoint); },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'leader', channel: 'general', symbol: 'EURUSD_otc' }),
   );
-  assert.deepEqual(seen, []);
-  assert.equal(r.sent, 0);
+  // The EURUSD subscriber is excluded: they already get that pair individually,
+  // and hearing about it twice is worse than either alone.
+  assert.deepEqual(seen.sort(), ['https://push.test/gbp', 'https://push.test/none']);
+});
+
+test('a subscriber who named nothing is general, not custom-for-everything', async () => {
+  // The decision this whole feature turns on. Someone who picked no pair gets
+  // the leader and nothing else; treating them as custom for all of them is
+  // the notification flood by another name.
+  const db = fakeDb([sub('https://push.test/all', null)]);
+  const custom = [];
+  await withSend(
+    async (s) => { custom.push(s.endpoint); },
+    () => push.broadcast(db, { kind: 'armed', channel: 'custom', symbol: 'EURUSD_otc' }),
+  );
+  assert.deepEqual(custom, [], 'a subscriber with no selection was sent a per-pair alert');
+
+  const general = [];
+  await withSend(
+    async (s) => { general.push(s.endpoint); },
+    () => push.broadcast(db, { kind: 'leader', channel: 'general', symbol: 'EURUSD_otc' }),
+  );
+  assert.deepEqual(general, ['https://push.test/all']);
+});
+
+test('an empty selection still gets the general channel', async () => {
+  // `[]` means "I named no pairs", which is a custom channel with nothing in
+  // it — not a subscriber who wants silence. They are in the general channel
+  // for every pair, exactly like someone who never opened the picker.
+  const db = fakeDb([sub('https://push.test/none', [])]);
+  const custom = [];
+  await withSend(
+    async (s) => { custom.push(s.endpoint); },
+    () => push.broadcast(db, { kind: 'armed', channel: 'custom', symbol: 'EURUSD_otc' }),
+  );
+  assert.deepEqual(custom, []);
+
+  const general = [];
+  await withSend(
+    async (s) => { general.push(s.endpoint); },
+    () => push.broadcast(db, { kind: 'leader', channel: 'general', symbol: 'EURUSD_otc' }),
+  );
+  assert.deepEqual(general, ['https://push.test/none']);
 });
 
 test('deletes a subscription the push service says is gone', async () => {
   const db = fakeDb([sub('https://push.test/dead', null)]);
   const r = await withSend(
     async () => { const e = new Error('gone'); e.statusCode = 410; throw e; },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.equal(r.removed, 1);
   assert.deepEqual(db.deleted, ['https://push.test/dead']);
@@ -133,7 +175,7 @@ test('keeps a subscription that failed for a passing reason', async () => {
   const db = fakeDb([sub('https://push.test/flaky', null)]);
   const r = await withSend(
     async () => { const e = new Error('boom'); e.statusCode = 500; throw e; },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.equal(r.failed, 1);
   assert.equal(r.removed, 0);
@@ -149,7 +191,7 @@ test('gives up on one that has failed for long enough', async () => {
   const db = fakeDb([sub('https://push.test/old-key', null, 9)]);
   const r = await withSend(
     async () => { const e = new Error('forbidden'); e.statusCode = 403; throw e; },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.equal(r.removed, 1);
   assert.deepEqual(db.deleted, ['https://push.test/old-key']);
@@ -161,7 +203,7 @@ test('forgets past failures the moment one works', async () => {
   const db = fakeDb([sub('https://push.test/back', null, 7)]);
   await withSend(
     async () => undefined,
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.deepEqual(db.deleted, []);
   assert.deepEqual(db.updates[0].patch, { failures: 0 });
@@ -172,7 +214,7 @@ test('drops a row whose stored subscription is unusable', async () => {
   const db = fakeDb([{ endpoint: 'https://push.test/broken', subscription: null, symbols: null }]);
   const r = await withSend(
     async () => { throw new Error('should not be called'); },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.equal(r.removed, 1);
 });
@@ -186,7 +228,7 @@ test('one dead subscription does not stop the others', async () => {
     async (s) => {
       if (s.endpoint.endsWith('dead')) { const e = new Error('gone'); e.statusCode = 404; throw e; }
     },
-    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+    () => push.broadcast(db, { kind: 'signal', channel: 'general', symbol: 'EURUSD_otc' }),
   );
   assert.equal(r.sent, 1);
   assert.equal(r.removed, 1);
