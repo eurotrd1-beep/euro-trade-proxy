@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: fd6416cc2076be077d3e2aaf74fcd2da0f1b711389ff2b3337f1b7b178cbfac0
+// engine-source-sha256: 1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -80,6 +80,7 @@ __export(src_exports, {
   ruleFromJson: () => ruleFromJson,
   scoreStandard: () => scoreStandard,
   scoreV2: () => scoreV2,
+  setupCompletion: () => setupCompletion,
   sma: () => sma,
   stochastic: () => stochastic,
   strategyConfigFromJson: () => strategyConfigFromJson,
@@ -1402,6 +1403,13 @@ var fib236Touch = {
     };
   }
 };
+function setupCompletion(armed, price) {
+  const reached = armed.direction === "CALL" ? price <= armed.level : price >= armed.level;
+  if (reached) return 1;
+  const leg = Math.abs(armed.level - armed.endPrice) / FIB;
+  if (!(leg > 0)) return 0;
+  return Math.max(0, Math.min(1, 1 - Math.abs(price - armed.level) / leg));
+}
 
 // packages/engine/src/programs/index.ts
 var PROGRAMS = [fib236Touch];
@@ -1489,6 +1497,7 @@ function programFor(id) {
   ruleFromJson,
   scoreStandard,
   scoreV2,
+  setupCompletion,
   sma,
   stochastic,
   strategyConfigFromJson,
@@ -1503,5 +1512,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "fd6416cc2076be077d3e2aaf74fcd2da0f1b711389ff2b3337f1b7b178cbfac0";
+module.exports.BUNDLE_SOURCE_HASH = "1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80";
 

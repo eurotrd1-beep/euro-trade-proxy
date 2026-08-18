@@ -160,25 +160,125 @@ function displayName(symbol) {
  * everybody is right while the two plans share a strategy; the day they stop
  * sharing one, this is where the split goes.
  */
-function announce(symbol, kind, body) {
+function announce(symbol, kind, channel, body) {
   if (!push.isReady() || !db) return;
+  const title =
+    kind === 'signal'
+      ? `إشارة بدأت — ${displayName(symbol)}`
+      : kind === 'leader'
+        ? `أقرب فرصة دلوقتي — ${displayName(symbol)}`
+        : `فرصة بتتكوّن — ${displayName(symbol)}`;
   void push
-    .broadcast(db, {
-      kind,
-      symbol,
-      title:
-        kind === 'signal'
-          ? `إشارة بدأت — ${displayName(symbol)}`
-          : `فرصة بتتكوّن — ${displayName(symbol)}`,
-      body,
-      at: Date.now(),
-    })
+    .broadcast(db, { kind, channel, symbol, title, body, at: Date.now() })
     .then((r) => {
       if (r.sent > 0 || r.removed > 0) {
-        log(`إشعار ${kind} ${symbol} · وصل ${r.sent} · اتشال ${r.removed}`);
+        log(`إشعار ${kind}/${channel} ${symbol} · وصل ${r.sent} · اتشال ${r.removed}`);
       }
     })
     .catch((e) => err('إشعار فشل:', e.message));
+}
+
+/**
+ * ── The general channel ────────────────────────────────────────────────────
+ *
+ * One message at a time, about the pair closest to firing, and silence while a
+ * trade is running.
+ *
+ * The problem it solves: there are 89 pairs and a subscriber who named none of
+ * them was being told about every setup on all of them. That is not a
+ * notification stream anybody keeps switched on. So instead of announcing each
+ * pair, the channel announces a POSITION — "this is the one to watch" — and
+ * only says so again when a different pair is meaningfully ahead.
+ *
+ * "Meaningfully" is the whole design. Completions move every few seconds and
+ * two pairs within a point of each other would trade the lead back and forth
+ * for as long as they stayed close, which is more noise than announcing all 89.
+ * A challenger has to beat the incumbent by a clear margin to take it.
+ */
+
+/** How far ahead a challenger must be, in percentage points, to take the lead. */
+const LEADER_MARGIN = 10;
+
+/**
+ * Below this a pair is not worth pointing anybody at.
+ *
+ * Something is always technically closest, including on a morning where the
+ * best in the book is 4% of the way there. Announcing that is a notification
+ * that says nothing, and the honest state is no leader at all.
+ */
+const LEADER_FLOOR = 25;
+
+/** The pair currently announced, or null while nothing is worth announcing. */
+let leader = null;
+
+/**
+ * The pair whose trade is running, if any.
+ *
+ * While this is set the general channel says nothing whatsoever — not about a
+ * new leader, not about another pair reaching its level. The subscriber is
+ * watching a trade play out and a second alert during it is the one thing
+ * guaranteed to be unwelcome. It clears when that pair's cycle ends, which is
+ * the program's own answer rather than a timer that could drift out of step.
+ */
+let generalTrade = null;
+
+/**
+ * Ranks every armed pair and moves the lead if anyone earned it.
+ *
+ * Runs after the per-pair loop rather than inside it, because "who is closest"
+ * is a question about all of them at once and cannot be answered one at a time.
+ */
+function updateLeader(symbols) {
+  if (generalTrade !== null) return; // a trade owns the channel
+
+  const ranked = [];
+  for (const symbol of symbols) {
+    const state = programStates.get(`${PLANS[0].plan}|${symbol}`);
+    const armed = state && state.armed;
+    if (!armed) continue; // no setup is not zero — there is nothing to measure
+
+    const raw = storeFor(symbol);
+    const last = raw && raw.length > 0 ? raw[raw.length - 1] : null;
+    if (!last) continue;
+
+    const pct = engine.setupCompletion(armed, last.c) * 100;
+    // The longer leg wins a tie: a bigger swing is a clearer structure than a
+    // twitch, and ranking has to be reproducible rather than down to whichever
+    // order the symbols happened to arrive in.
+    const leg = Math.abs(armed.level - armed.endPrice) / 0.236;
+    ranked.push({ symbol, pct, leg, direction: armed.direction, level: armed.level });
+  }
+
+  if (ranked.length === 0) {
+    // Nothing is forming. The last leader is forgotten rather than left
+    // standing, so the next pair to arm is announced as new instead of being
+    // silently compared against a setup that has since expired.
+    leader = null;
+    return;
+  }
+
+  ranked.sort((a, b) => (b.pct - a.pct) || (b.leg - a.leg) || a.symbol.localeCompare(b.symbol));
+  const best = ranked[0];
+  if (best.pct < LEADER_FLOOR) { leader = null; return; }
+
+  const held = leader === null ? null : ranked.find((r) => r.symbol === leader.symbol);
+  // An incumbent whose setup is gone does not get to keep the lead by default.
+  if (held !== undefined && held !== null && best.pct < held.pct + LEADER_MARGIN) {
+    leader = { symbol: held.symbol, pct: held.pct };
+    return;
+  }
+  if (leader !== null && leader.symbol === best.symbol) {
+    leader = { symbol: best.symbol, pct: best.pct };
+    return;
+  }
+
+  leader = { symbol: best.symbol, pct: best.pct };
+  announce(
+    best.symbol,
+    'leader',
+    'general',
+    `${best.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · قرّب ${best.pct.toFixed(0)}% من مستوى ${best.level.toFixed(5)}`,
+  );
 }
 
 // ── Alerts ──────────────────────────────────────────────────────────────────
@@ -300,6 +400,12 @@ function tick() {
       // the row is built because a trade opening is the thing the user asked
       // to be woken for, and it must not wait on a database write.
       if (plan === PLANS[0].plan) {
+        // ── The custom channel ────────────────────────────────────────────
+        //
+        // A pair somebody named, announced the moment its setup arms. No
+        // ranking, no margin, no quiet period: they asked to be told about
+        // this pair and being told is the whole of it. `broadcast` delivers
+        // only to subscribers who listed this symbol.
         const armed = state.armed;
         const key = armed ? armed.key : null;
         if (key !== null && announced.get(symbol) !== key) {
@@ -307,6 +413,7 @@ function tick() {
           announce(
             symbol,
             'armed',
+            'custom',
             `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · مستنيين السعر يوصل ${armed.level.toFixed(5)}`,
           );
         }
@@ -315,13 +422,26 @@ function tick() {
         if (key === null) announced.delete(symbol);
 
         if (event.signal !== null) {
-          announce(
-            symbol,
-            'signal',
+          const body =
             `${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
-              (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : ''),
-          );
+            (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : '');
+
+          announce(symbol, 'signal', 'custom', body);
+
+          // The general channel hears about a trade opening — that is the
+          // payoff of the leader it was following, and the last thing it will
+          // hear until the trade is over.
+          if (generalTrade === null) {
+            generalTrade = symbol;
+            leader = null;
+            announce(symbol, 'signal', 'general', body);
+          }
         }
+
+        // Silence ends when the program says the cycle is finished, not on a
+        // timer: a martingale extends the cycle, and a clock would reopen the
+        // channel in the middle of the recovery trade.
+        if (event.cycleEnd !== null && generalTrade === symbol) generalTrade = null;
       }
 
       // A trade is recorded when it SETTLES, with the two prices the program
@@ -348,6 +468,10 @@ function tick() {
       }
     }
   }
+
+  // Ranking is a question about every pair at once, so it is asked after the
+  // loop rather than inside it.
+  updateLeader(symbols);
 }
 
 /**

@@ -106,18 +106,31 @@ async function broadcast(db, payload) {
   let failed = 0;
 
   /**
-   * Whether this subscriber asked about this pair.
+   * Whether this subscriber should be sent this particular message.
    *
-   * `null` means every pair — the default, and not the same as an empty list,
-   * which means the user deselected everything and should get nothing. Both
-   * are reachable from the picker, so the two are kept apart: folding an empty
-   * list into "everything" would send notifications to somebody who had just
-   * turned them all off.
+   * There are two channels and a subscription is in one of them PER PAIR, not
+   * as a whole. Somebody who picked EURUSD and GBPUSD is in the custom channel
+   * for those two and in the general channel for the other 87.
+   *
+   *   • custom  — the pairs they named. Every setup on them is announced
+   *               immediately and individually. Untouched by any of the leader
+   *               logic; this is what they asked for and what they get.
+   *   • general — everything else. One message at a time about whichever pair
+   *               is closest to firing, and nothing at all while a trade runs.
+   *               `symbols: null` — no selection made — is entirely here, which
+   *               is the point: a notification from each of 89 pairs is the
+   *               thing the leader was introduced to stop.
+   *
+   * An empty list is a real state and means the custom channel is empty, not
+   * that everything is custom. That subscriber still gets the general channel.
    */
+  const chose = (row, symbol) =>
+    Array.isArray(row.symbols) && row.symbols.includes(symbol);
+
   const wants = (row) =>
-    row.symbols === null || row.symbols === undefined
-      ? true
-      : Array.isArray(row.symbols) && row.symbols.includes(payload.symbol);
+    payload.channel === 'custom'
+      ? chose(row, payload.symbol)
+      : !chose(row, payload.symbol);
 
   // Sent in parallel: a few thousand subscriptions one after another would not
   // finish inside the minute before the next candle closes.
