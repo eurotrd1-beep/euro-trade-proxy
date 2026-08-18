@@ -120,3 +120,75 @@ test('evaluates every plan, not just one', () => {
   assert.ok(rows.some((r) => r.slot.endsWith('_free')));
   assert.ok(rows.some((r) => r.slot.endsWith('_paid')));
 });
+
+/**
+ * Settlement.
+ *
+ * These exist because of a bug that ran in production: rows were written and
+ * then matched back to outcomes held in memory, keyed on `expires_at` — which
+ * `record_signals` builds from `created_at`, the moment of the INSERT, while
+ * the key was built from the trade's candle. The row is written a minute or
+ * more after that candle, so the two were never equal and not one row was ever
+ * matched. Every signal stayed `pending` for ever, and nothing said so.
+ *
+ * The lesson is not "that key was wrong" but that the settlement path was the
+ * one path with no test on it. So it has one now, and it settles from the
+ * trade's own candle — the only clock that means anything here.
+ */
+test.describe('settlement', () => {
+  const MIN = 60_000;
+  const t0 = Date.parse('2026-08-18T10:00:00Z');
+  // Four one-minute candles. Each closes somewhere different so the assertions
+  // below can only pass if the RIGHT candle was picked.
+  const store = [
+    { t: (t0 + 0 * MIN) / 1000, o: 1.1000, h: 1.1010, l: 1.0990, c: 1.1008 },
+    { t: (t0 + 1 * MIN) / 1000, o: 1.1008, h: 1.1012, l: 1.1001, c: 1.1002 },
+    { t: (t0 + 2 * MIN) / 1000, o: 1.1002, h: 1.1005, l: 1.0995, c: 1.0997 },
+    { t: (t0 + 3 * MIN) / 1000, o: 1.0997, h: 1.1000, l: 1.0990, c: 1.0999 },
+  ];
+  const lookup = (symbol) => (symbol === 'EURUSD_otc' ? store : null);
+  const now = t0 + 10 * MIN;
+  const row = (over) => ({
+    id: 1, symbol: 'EURUSD_otc', direction: 'CALL', entry_price: 1.1002,
+    bar_time: new Date(t0 + 2 * MIN).toISOString(), expiry_seconds: 60, ...over,
+  });
+
+  test.it('settles from the trade’s own candle, not from when the row was written', () => {
+    // The regression. Entry is the open of the 10:02 candle and that candle
+    // closes below it, so the CALL loses. Read the 10:03 candle instead — the
+    // one a write-time clock would drift onto — and it closes above its open,
+    // which would report a win. Only `bar_time` gives the true answer.
+    const [out] = gen.__test.settlementFor([row()], lookup, now);
+    assert.equal(out.price, 1.0997, 'took the close of a candle that was not the trade’s');
+    assert.equal(out.outcome, 'loss');
+  });
+
+  test.it('records a close inside the engine’s band as a tie', () => {
+    // Half the tie band above entry: not equal to entry, and inside it. The
+    // engine is the only thing that decides this — the settlement path must
+    // not carry a second opinion about what counts as a draw.
+    const entry = 1.1002;
+    const close = store[2].c;
+    const tied = row({ entry_price: close + (Math.abs(close) * 5e-6) / 2 });
+    const [out] = gen.__test.settlementFor([tied], lookup, now);
+    assert.equal(out.outcome, 'tie');
+    assert.notEqual(tied.entry_price, close, 'a tie that is just equality proves nothing');
+    assert.ok(entry > 0);
+  });
+
+  test.it('marks a trade whose candle is gone as unresolved, never as a tie', () => {
+    const [out] = gen.__test.settlementFor([row({ symbol: 'GONE_otc' })], lookup, now);
+    assert.equal(out.price, null);
+    assert.equal(out.outcome, null);
+  });
+
+  test.it('leaves a trade that is still running alone', () => {
+    const running = row({ bar_time: new Date(now - 30_000).toISOString() });
+    assert.deepEqual(gen.__test.settlementFor([running], lookup, now), []);
+  });
+
+  test.it('settles a PUT by the same candle and the same rule', () => {
+    const [out] = gen.__test.settlementFor([row({ direction: 'PUT' })], lookup, now);
+    assert.equal(out.outcome, 'win', 'price fell and the PUT should have won');
+  });
+});

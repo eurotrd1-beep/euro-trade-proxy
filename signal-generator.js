@@ -158,20 +158,6 @@ const programStates = new Map();
 /** Rows waiting to be written. */
 let buffer = [];
 
-/**
- * `symbol|expiresAtMs` → { price, outcome } as the program settled it.
- *
- * The insert returns ids but not the result, and the two have to be matched
- * back up to resolve in the same pass. Entry time plus symbol is unique — one
- * trade per pair per candle is the whole design — so it is enough of a key.
- *
- * The OUTCOME travels with the price on purpose. The database used to work it
- * out again from entry and exit, with a stricter idea of a tie than the engine
- * has, so a close inside the engine's tolerance was a tie to the strategy and
- * a win to the statistics. It is decided once now, here, by the same call that
- * decided whether a martingale followed.
- */
-const exits = new Map();
 
 let cappedToday = false;
 let stats = { evaluated: 0, signals: 0, written: 0, duplicates: 0, resolved: 0, unresolved: 0 };
@@ -276,10 +262,6 @@ function tick() {
             bar,
           ),
         );
-        exits.set(`${symbol}|${bar.time + EXPIRY_SECONDS * 1000}`, {
-          price: event.settled.exitPrice,
-          outcome: event.settled.result.toLowerCase(),
-        });
       }
     }
   }
@@ -359,18 +341,21 @@ async function flush() {
       return;
     }
 
-    // Every row written here is already finished — see the note at the top —
-    // so it is resolved in the same pass, with the exit the program settled on.
-    // Nothing is left pending for a ticker to guess at later.
-    const resolveRows = [];
-    for (const row of r.ids ?? []) {
-      const key = `${row.symbol}|${new Date(row.expires_at).getTime()}`;
-      const settled = exits.get(key);
-      if (settled === undefined) continue;
-      exits.delete(key);
-      resolveRows.push({ id: row.id, price: settled.price, outcome: settled.outcome });
-    }
-    if (resolveRows.length > 0) await resolveNow(resolveRows);
+    // Resolution happens in `settlePending`, not here.
+    //
+    // This used to match the inserted ids back to the outcomes it was holding
+    // in memory, keyed by `symbol|expires_at`. It never matched a single row.
+    // `record_signals` builds `expires_at` from `created_at` — the moment of
+    // the INSERT — while the key was built from the trade's candle, and the
+    // row is written a minute or more after that candle. Two clocks, never
+    // equal, and the failure was silent: every row stayed `pending` for ever
+    // and the statistics quietly stopped having outcomes.
+    //
+    // So the fragile half is gone. `settlePending` reads the pending rows back
+    // with their direction and bar time and settles them from the trade's own
+    // candle — which is the path that already had to exist for rows a restart
+    // stranded. One way of settling, and it is the one that reads the data it
+    // needs rather than trying to remember it.
   } catch (e) {
     err('flush:', e.message);
     // Put them back — a failed write must not silently lose signals. Capped at
@@ -407,16 +392,58 @@ async function resolveNow(rows) {
 }
 
 /**
- * Rows a crash left behind.
+ * The arithmetic behind `settlePending`, with the database and the store
+ * passed in so it can be exercised on fixtures.
  *
- * Nothing writes `pending` in normal operation any more — a row is inserted
- * and resolved in the same pass. What this catches is the process dying
- * between the two, which would otherwise leave a row pending for ever and drag
- * the statistics down with it. The exit comes from the trade's own candle if
- * the store still holds it, and the row is marked unresolved if it does not:
- * "no price" is a fourth state and must never be recorded as a tie.
+ * Two clocks matter here and only one of them is right. A row carries the time
+ * of the candle the trade was placed on, and it is written to the database a
+ * minute or more after that candle — so `created_at` is a different instant and
+ * always will be. The exit price must come from the trade's OWN candle, found
+ * by `bar_time`. An earlier version keyed on a value the database derived from
+ * `created_at`, matched nothing, and left every row pending in silence; the
+ * tests below exist so that class of mistake fails loudly instead.
  */
-async function sweepStranded() {
+function settlementFor(pending, lookup, now) {
+  const rows = [];
+  for (const row of pending) {
+    const barTime = new Date(row.bar_time).getTime();
+    const expiresAt = barTime + (row.expiry_seconds || EXPIRY_SECONDS) * 1000;
+    if (expiresAt > now) continue; // still running
+
+    const raw = lookup(row.symbol);
+    const bar = raw && raw.find((c) => c.t * 1000 === barTime);
+    if (!bar) {
+      // "No price" is a fourth state. Recording it as a tie would inflate ties
+      // and nobody would ever find out why.
+      rows.push({ id: row.id, price: null, outcome: null });
+      continue;
+    }
+    rows.push({
+      id: row.id,
+      price: bar.c,
+      outcome: engine.outcomeFor(row.direction, row.entry_price, bar.c).toLowerCase(),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Settles every row still waiting — the only path that settles anything.
+ *
+ * Reads the pending rows back with their direction and bar time, finds each
+ * trade's own candle in the store, and settles it through `outcomeFor`: the
+ * same call, and therefore the same verdict, that decided whether a martingale
+ * followed.
+ *
+ * Reading the rows back rather than remembering them is what makes this
+ * correct across a restart, and it is also what makes it correct at all — the
+ * version that remembered them matched on a key the database builds from a
+ * different clock, and matched nothing.
+ *
+ * A trade whose candle is no longer in the store is marked `unresolved`. "No
+ * price" is a fourth state and must never be recorded as a tie.
+ */
+async function settlePending() {
   if (!db) return;
   try {
     // Read directly rather than through `pending_signals`: the direction is
@@ -430,31 +457,12 @@ async function sweepStranded() {
       .limit(500);
     if (error) throw new Error(error.message);
 
-    const rows = [];
-    for (const row of data ?? []) {
-      const barTime = new Date(row.bar_time).getTime();
-      const expiresAt = barTime + (row.expiry_seconds || EXPIRY_SECONDS) * 1000;
-      if (expiresAt > Date.now()) continue; // still running
-
-      const raw = storeFor(row.symbol);
-      const bar = raw && raw.find((c) => c.t * 1000 === barTime);
-      if (!bar) {
-        // "No price" is a fourth state. Recording it as a tie would inflate
-        // ties and nobody would ever find out why.
-        rows.push({ id: row.id, price: null, outcome: null });
-        stats.unresolved++;
-        continue;
-      }
-      rows.push({
-        id: row.id,
-        price: bar.c,
-        outcome: engine.outcomeFor(row.direction, row.entry_price, bar.c).toLowerCase(),
-      });
-    }
+    const rows = settlementFor(data ?? [], storeFor, Date.now());
+    stats.unresolved += rows.filter((r) => r.price === null).length;
 
     if (rows.length > 0) {
       await resolveNow(rows);
-      log(`سوّيت ${rows.length} إشارة كانت معلّقة بعد انقطاع`);
+      stats.resolved += rows.length;
     }
   } catch (e) {
     err('sweepStranded:', e.message);
@@ -524,13 +532,12 @@ async function start() {
     `بيشتغل على ${TIMEFRAME} · إحماء ${WARMUP} شمعة · انتهاء ${EXPIRY_SECONDS}s · ` +
       `بصمة المحرك ${(engine.BUNDLE_SOURCE_HASH || 'غير معروفة').slice(0, 16)}…`,
   );
-  await sweepStranded();
+  await settlePending();
 
   setInterval(() => { rolloverCheck(); tick(); }, TICK_MS);
-  setInterval(() => { void flush(); }, FLUSH_MS);
-  // Only for rows a crash stranded between insert and resolve. In normal
-  // operation `flush` resolves what it writes, so this finds nothing.
-  setInterval(() => { void sweepStranded(); }, 600_000);
+  // Write, then settle what is now waiting. In that order: a trade written
+  // this minute is settled the next, once its candle is in the store.
+  setInterval(() => { void flush().then(() => settlePending()); }, FLUSH_MS);
   setInterval(() => { void rollup(); }, ROLLUP_MS);
   setInterval(() => { void prune(); }, PRUNE_MS);
   setInterval(report, 3600_000);
@@ -551,7 +558,8 @@ module.exports = {
     takeBuffer: () => { const b = buffer; buffer = []; return b; },
     // Module state outlives a single run, so a harness that replays twice sees
     // the second pass do nothing at all. Resetting is the harness's job.
-    reset: () => { programStates.clear(); exits.clear(); buffer = []; },
+    reset: () => { programStates.clear(); buffer = []; },
+    settlementFor,
   },
 };
 
