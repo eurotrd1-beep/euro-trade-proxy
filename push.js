@@ -41,6 +41,15 @@ const PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 const SUBJECT = process.env.VAPID_SUBJECT || 'mailto:support@eurotrade.app';
 
+/**
+ * Consecutive failures before a subscription is given up on.
+ *
+ * At one tick a minute this is roughly ten minutes of continuous failure —
+ * long enough that no plausible outage costs anybody their notifications, short
+ * enough that rows which can never succeed stop being retried the same day.
+ */
+const FAILURE_LIMIT = 10;
+
 let ready = false;
 if (webpush && PUBLIC_KEY && PRIVATE_KEY) {
   try {
@@ -84,7 +93,7 @@ async function broadcast(db, payload) {
 
   const { data, error } = await db
     .from('push_subscriptions')
-    .select('endpoint, p256dh, auth, symbols')
+    .select('endpoint, subscription, symbols, failures')
     .limit(5000);
   if (error) {
     console.error('[push] تعذّرت قراءة الاشتراكات:', error.message);
@@ -112,26 +121,60 @@ async function broadcast(db, payload) {
 
   // Sent in parallel: a few thousand subscriptions one after another would not
   // finish inside the minute before the next candle closes.
+  const recovered = [];
+  const struggling = [];
+
   await Promise.all(
     (data || []).filter(wants).map(async (row) => {
+      // The subscription is stored exactly as the browser handed it over,
+      // which is exactly what `sendNotification` wants. Taking it apart into
+      // columns would only mean putting it back together on every send.
+      const sub = row.subscription;
+      if (!sub || !sub.endpoint || !sub.keys) { dead.push(row.endpoint); return; }
+
       try {
-        await webpush.sendNotification(
-          { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } },
-          body,
-          { TTL: 120 }, // Two minutes. A trade this is about is over by then.
-        );
+        await webpush.sendNotification(sub, body, { TTL: 120 }); // A trade is over by then.
         sent++;
+        if ((row.failures || 0) > 0) recovered.push(row.endpoint);
       } catch (e) {
-        if (e && (e.statusCode === 404 || e.statusCode === 410)) dead.push(row.endpoint);
-        else failed++;
+        const code = e && e.statusCode;
+        // 404 and 410 are final: the browser is gone, the data was cleared, or
+        // the subscription was replaced. Anything else might be the push
+        // service having a bad minute, so it counts rather than deletes.
+        if (code === 404 || code === 410) dead.push(row.endpoint);
+        else {
+          failed++;
+          struggling.push({ endpoint: row.endpoint, failures: (row.failures || 0) + 1 });
+        }
       }
     }),
   );
 
-  if (dead.length > 0) {
-    await db.from('push_subscriptions').delete().in('endpoint', dead);
+  // Sustained failure is its own kind of dead. A subscription made under a
+  // previous VAPID key answers 403 for ever — never 410 — so without this the
+  // system would retry a handful of unreachable rows every minute indefinitely.
+  // The threshold is minutes of continuous failure, not one bad reply, so an
+  // upstream wobble costs nobody their subscription.
+  const exhausted = struggling.filter((r) => r.failures >= FAILURE_LIMIT).map((r) => r.endpoint);
+  const retrying = struggling.filter((r) => r.failures < FAILURE_LIMIT);
+
+  const gone = dead.concat(exhausted);
+  if (gone.length > 0) {
+    await db.from('push_subscriptions').delete().in('endpoint', gone);
   }
-  return { sent, removed: dead.length, failed };
+  // Counted per row so the tally means something, and reset the moment one
+  // works again — otherwise a subscription that fails on and off for an hour
+  // eventually crosses the line despite being perfectly alive.
+  await Promise.all([
+    ...retrying.map((r) =>
+      db.from('push_subscriptions').update({ failures: r.failures }).eq('endpoint', r.endpoint),
+    ),
+    recovered.length > 0
+      ? db.from('push_subscriptions').update({ failures: 0 }).in('endpoint', recovered)
+      : null,
+  ].filter(Boolean));
+
+  return { sent, removed: gone.length, failed };
 }
 
 /** Stores or refreshes one subscription. Called by the API on the app's behalf. */
@@ -143,15 +186,16 @@ async function save(db, sub, accountId, plan, symbols) {
   const { error } = await db.from('push_subscriptions').upsert(
     {
       endpoint: sub.endpoint,
-      p256dh: sub.keys.p256dh,
-      auth: sub.keys.auth,
-      account_id: accountId || null,
+      subscription: sub,
+      user_id: accountId || null,
       plan: plan || null,
       // Only a real array is stored. Anything else — absent, a string, junk —
       // becomes NULL, which is "every pair", because the safe failure for a
       // filter is to deliver rather than to go silently quiet.
       symbols: Array.isArray(symbols) ? symbols : null,
-      last_seen_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      // Re-subscribing is the user telling us this one works. Whatever the old
+      // row had counted against it does not apply to a fresh registration.
       failures: 0,
     },
     { onConflict: 'endpoint' },

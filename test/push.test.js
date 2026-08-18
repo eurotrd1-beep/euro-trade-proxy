@@ -25,13 +25,15 @@ process.env.VAPID_SUBJECT = 'mailto:test@example.com';
 
 const push = require('../push.js');
 
-/** A database that serves fixed rows and records what was deleted. */
+/** A database that serves fixed rows and records what was written. */
 function fakeDb(rows) {
   const deleted = [];
   const upserts = [];
+  const updates = [];
   return {
     deleted,
     upserts,
+    updates,
     from() {
       return {
         select: () => ({ limit: async () => ({ data: rows, error: null }) }),
@@ -39,13 +41,26 @@ function fakeDb(rows) {
           in: async (_col, list) => { deleted.push(...list); return { error: null }; },
           eq: async (_col, value) => { deleted.push(value); return { error: null }; },
         }),
+        update: (patch) => ({
+          eq: async (_col, value) => { updates.push({ patch, on: [value] }); return { error: null }; },
+          in: async (_col, list) => { updates.push({ patch, on: list }); return { error: null }; },
+        }),
         upsert: async (row) => { upserts.push(row); return { error: null }; },
       };
     },
   };
 }
 
-const sub = (endpoint, symbols) => ({ endpoint, p256dh: 'p', auth: 'a', symbols });
+/**
+ * A stored row, in the shape the table actually has: the subscription is kept
+ * as the browser handed it over, which is what `sendNotification` wants back.
+ */
+const sub = (endpoint, symbols, failures = 0) => ({
+  endpoint,
+  subscription: { endpoint, keys: { p256dh: 'p', auth: 'a' } },
+  symbols,
+  failures,
+});
 
 /** Replaces the network call for one test, and always puts it back. */
 async function withSend(impl, fn) {
@@ -123,6 +138,43 @@ test('keeps a subscription that failed for a passing reason', async () => {
   assert.equal(r.failed, 1);
   assert.equal(r.removed, 0);
   assert.deepEqual(db.deleted, []);
+  // Counted, though — this is what eventually retires one that can never work.
+  assert.deepEqual(db.updates[0].patch, { failures: 1 });
+});
+
+test('gives up on one that has failed for long enough', async () => {
+  // A subscription made under a previous VAPID key answers 403 for ever and
+  // never 410, so nothing else would ever retire it. Ten straight failures at
+  // one tick a minute is roughly ten minutes — past any plausible outage.
+  const db = fakeDb([sub('https://push.test/old-key', null, 9)]);
+  const r = await withSend(
+    async () => { const e = new Error('forbidden'); e.statusCode = 403; throw e; },
+    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+  );
+  assert.equal(r.removed, 1);
+  assert.deepEqual(db.deleted, ['https://push.test/old-key']);
+});
+
+test('forgets past failures the moment one works', async () => {
+  // Otherwise a subscription that fails on and off for an hour crosses the
+  // line despite being perfectly alive.
+  const db = fakeDb([sub('https://push.test/back', null, 7)]);
+  await withSend(
+    async () => undefined,
+    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+  );
+  assert.deepEqual(db.deleted, []);
+  assert.deepEqual(db.updates[0].patch, { failures: 0 });
+});
+
+test('drops a row whose stored subscription is unusable', async () => {
+  // Nothing can ever be sent to it, and it would be retried every minute.
+  const db = fakeDb([{ endpoint: 'https://push.test/broken', subscription: null, symbols: null }]);
+  const r = await withSend(
+    async () => { throw new Error('should not be called'); },
+    () => push.broadcast(db, { kind: 'signal', symbol: 'EURUSD_otc' }),
+  );
+  assert.equal(r.removed, 1);
 });
 
 test('one dead subscription does not stop the others', async () => {
@@ -151,7 +203,9 @@ test('stores a subscription with the pairs it chose', async () => {
   );
   assert.equal(db.upserts.length, 1);
   assert.deepEqual(db.upserts[0].symbols, ['EURUSD_otc']);
-  assert.equal(db.upserts[0].account_id, 'acct-1');
+  assert.equal(db.upserts[0].user_id, 'acct-1');
+  // Stored whole, not taken apart into columns and rebuilt on every send.
+  assert.deepEqual(db.upserts[0].subscription.keys, { p256dh: 'p', auth: 'a' });
 });
 
 test('stores anything that is not a list as "every pair"', async () => {
