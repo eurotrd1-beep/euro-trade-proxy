@@ -126,6 +126,61 @@ try {
   err('supabase client unavailable:', e.message);
 }
 
+const push = require('./push.js');
+
+/**
+ * Which pairs have already been announced, so nobody is told twice.
+ *
+ * Keyed by symbol, holding the identity of the setup that was announced. The
+ * program rebuilds an armed setup from the candles on every tick, so without
+ * this the same opportunity would be pushed once a minute for as long as it
+ * stood — which is the fastest way to make somebody turn notifications off.
+ */
+const announced = new Map();
+
+/**
+ * A pair's display name, for a notification the user reads at a glance.
+ *
+ * `EURUSD_otc` means nothing on a lock screen. The suffix is kept because OTC
+ * and the real market are different instruments and the user is choosing which
+ * chart to open.
+ */
+function displayName(symbol) {
+  const otc = /_otc$/i.test(symbol);
+  const base = symbol.replace(/_otc$/i, '');
+  const pair = base.length === 6 ? `${base.slice(0, 3)}/${base.slice(3)}` : base;
+  return otc ? `${pair} OTC` : pair;
+}
+
+/**
+ * Tells everyone a setup is forming, or that a trade just opened.
+ *
+ * Both plans run the same program, so the loop below reaches this twice for
+ * one event — hence the guard on plan. Sending it once and delivering to
+ * everybody is right while the two plans share a strategy; the day they stop
+ * sharing one, this is where the split goes.
+ */
+function announce(symbol, kind, body) {
+  if (!push.isReady() || !db) return;
+  void push
+    .broadcast(db, {
+      kind,
+      symbol,
+      title:
+        kind === 'signal'
+          ? `إشارة بدأت — ${displayName(symbol)}`
+          : `فرصة بتتكوّن — ${displayName(symbol)}`,
+      body,
+      at: Date.now(),
+    })
+    .then((r) => {
+      if (r.sent > 0 || r.removed > 0) {
+        log(`إشعار ${kind} ${symbol} · وصل ${r.sent} · اتشال ${r.removed}`);
+      }
+    })
+    .catch((e) => err('إشعار فشل:', e.message));
+}
+
 // ── Alerts ──────────────────────────────────────────────────────────────────
 
 /**
@@ -239,6 +294,34 @@ function tick() {
       } catch (e) {
         err(`${symbol} ${plan}:`, e.message);
         continue;
+      }
+
+      // Notifications, once per symbol rather than once per plan. Sent before
+      // the row is built because a trade opening is the thing the user asked
+      // to be woken for, and it must not wait on a database write.
+      if (plan === PLANS[0].plan) {
+        const armed = state.armed;
+        const key = armed ? armed.key : null;
+        if (key !== null && announced.get(symbol) !== key) {
+          announced.set(symbol, key);
+          announce(
+            symbol,
+            'armed',
+            `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · مستنيين السعر يوصل ${armed.level.toFixed(5)}`,
+          );
+        }
+        // Forgotten once the setup goes, so the SAME level forming again later
+        // is a new opportunity and gets announced again.
+        if (key === null) announced.delete(symbol);
+
+        if (event.signal !== null) {
+          announce(
+            symbol,
+            'signal',
+            `${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
+              (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : ''),
+          );
+        }
       }
 
       // A trade is recorded when it SETTLES, with the two prices the program
