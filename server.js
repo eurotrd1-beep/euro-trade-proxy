@@ -4,6 +4,7 @@ const http  = require('http');
 const https = require('https');
 const { WebSocket, WebSocketServer } = require('ws');
 const zlib = require('zlib');
+const push = require('./push.js');
 
 // ── Supabase (candles + pairs + OTC status) ───────────────────────────────────
 let db = null;
@@ -341,6 +342,53 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── POST /api/diagnose — Gemini smart diagnosis (suggests only) ──────────────
+  // ── Web Push ─────────────────────────────────────────────────────────────
+  //
+  // Three small endpoints so a browser can ask to be told about setups while
+  // it is not running. The sending itself lives in the generator, which is the
+  // only thing awake at 3am to notice.
+
+  // The public half of the VAPID pair. Served rather than baked into the app
+  // so rotating the keys is an environment change on one service, not a
+  // rebuild and redeploy of the front end.
+  if (url.pathname === '/api/push/key') {
+    json({ available: push.isReady(), key: push.publicKey() });
+    return;
+  }
+
+  if (url.pathname === '/api/push/subscribe' && req.method === 'POST') {
+    if (!push.isReady()) { json({ ok: false, reason: 'الإشعارات غير مفعّلة على السيرفر' }, 503); return; }
+    if (!db) { json({ ok: false, reason: 'قاعدة البيانات غير متاحة' }, 503); return; }
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 20000) req.destroy(); });
+    req.on('end', async () => {
+      let body; try { body = JSON.parse(raw || '{}'); } catch (_) { body = {}; }
+      try {
+        await push.save(db, body.subscription, body.accountId, body.plan, body.symbols);
+        json({ ok: true });
+      } catch (e) {
+        json({ ok: false, reason: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // Turning notifications off has to actually stop them. Without this the
+  // browser forgets its subscription while the server keeps sending to an
+  // endpoint that still works, and the user gets notifications they switched
+  // off with no way to make it stop.
+  if (url.pathname === '/api/push/unsubscribe' && req.method === 'POST') {
+    if (!db) { json({ ok: true }); return; }
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 20000) req.destroy(); });
+    req.on('end', async () => {
+      let body; try { body = JSON.parse(raw || '{}'); } catch (_) { body = {}; }
+      try { await push.remove(db, body.endpoint); } catch (_) { /* best effort */ }
+      json({ ok: true });
+    });
+    return;
+  }
+
   if (url.pathname === '/api/diagnose' && req.method === 'POST') {
     const key = process.env.GEMINI_API_KEY || '';
     if (!key) { json({ available: false, reason: 'GEMINI_API_KEY غير مضبوط' }); return; }
