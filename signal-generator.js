@@ -139,6 +139,20 @@ const push = require('./push.js');
 const announced = new Map();
 
 /**
+ * How far along a pair must be before it is worth a notification.
+ *
+ * The progress scale puts an adopted setup at 50: the leg is confirmed and the
+ * level is drawn, but price may be most of a leg away and may never come back.
+ * Announcing there means announcing a possibility, and enough of those arrive
+ * that the ones worth reading stop being read.
+ *
+ * 85 is inside the armed band and near the top of it, so it means "price is
+ * closing on the level", not "a level exists". The trade opening has its own
+ * message, one candle ahead of the entry.
+ */
+const NEAR_THRESHOLD = 85;
+
+/**
  * A pair's display name, for a notification the user reads at a glance.
  *
  * `EURUSD_otc` means nothing on a lock screen. The suffix is kept because OTC
@@ -322,28 +336,51 @@ function tick() {
       if (plan === PLANS[0].plan) {
         // ── The custom channel ────────────────────────────────────────────
         //
-        // A pair somebody named, announced the moment its setup arms. No
-        // ranking, no margin, no quiet period: they asked to be told about
-        // this pair and being told is the whole of it. `broadcast` delivers
-        // only to subscribers who listed this symbol.
+        // A pair somebody named. No ranking, no margin, no quiet period: they
+        // asked to be told about this pair. `broadcast` delivers only to the
+        // subscribers who listed this symbol.
+        //
+        // WHEN, though, changed. It used to fire the moment a setup was
+        // adopted, which on the progress scale is the halfway mark: the leg is
+        // confirmed and the level is drawn, but price may be most of a leg away
+        // and may never come back. That is an alert about a possibility, and
+        // enough of them arrive that the useful ones stop being read.
+        //
+        // Now it waits for the pair to be genuinely close, and the trade
+        // opening is announced separately below — which lands exactly one
+        // candle before the entry, since the touch happens on one candle and
+        // the trade opens on the next.
         const armed = state.armed;
         const key = armed ? armed.key : null;
-        if (key !== null && announced.get(symbol) !== key) {
-          announced.set(symbol, key);
-          announce(
-            symbol,
-            'armed',
-            'custom',
-            `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · مستنيين السعر يوصل ${armed.level.toFixed(5)}`,
-          );
+
+        if (key !== null) {
+          const raw = storeFor(symbol);
+          const last = raw && raw.length > 0 ? raw[raw.length - 1] : null;
+          const pct = last ? engine.setupProgress(state, null, last.c).percent : 0;
+
+          // Keyed by the setup, so one opportunity is announced once however
+          // long it hovers at the threshold — and a NEW setup on the same pair
+          // later is a new opportunity and is announced again.
+          if (pct >= NEAR_THRESHOLD && announced.get(symbol) !== key) {
+            announced.set(symbol, key);
+            announce(
+              symbol,
+              'armed',
+              'custom',
+              `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · قرّب ${pct.toFixed(0)}% · مستنيين ${armed.level.toFixed(5)}`,
+            );
+          }
+        } else {
+          announced.delete(symbol);
         }
-        // Forgotten once the setup goes, so the SAME level forming again later
-        // is a new opportunity and gets announced again.
-        if (key === null) announced.delete(symbol);
 
         if (event.signal !== null) {
+          // Sent on the candle the touch happened, for a trade that opens on
+          // the next one — so it arrives a full candle before the entry, which
+          // is the only warning that is any use to somebody who has to place
+          // the trade themselves.
           const body =
-            `${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
+            `الصفقة على الشمعة الجاية · ${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
             (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : '');
 
           announce(symbol, 'signal', 'custom', body);
