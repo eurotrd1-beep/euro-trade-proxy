@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80
+// engine-source-sha256: 5cd2ac94f541600202cffa54728614df4e99595a7c1972468a5e9ee0eb79b7c5
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -1512,5 +1512,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "1c9ce4809987f68846ef91c8feebfdcbf058b452288745bb4dc7c0034d450d80";
+module.exports.BUNDLE_SOURCE_HASH = "5cd2ac94f541600202cffa54728614df4e99595a7c1972468a5e9ee0eb79b7c5";
 
