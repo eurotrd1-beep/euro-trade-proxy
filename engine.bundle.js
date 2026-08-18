@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: b3580b6797916efe131a61f733733b984b89238bf8d8f26c334de747dc9f1ab4
+// engine-source-sha256: f1e448cc7e885dfe6a1b1956f8404b596ffd4e9f4b186a6eda0ee5b405948e1f
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -27,6 +27,7 @@ __export(src_exports, {
   CONFIDENCE_SATURATION_SCORE: () => CONFIDENCE_SATURATION_SCORE,
   DEFAULT_PROGRAM_ID: () => DEFAULT_PROGRAM_ID,
   DEFAULT_STRATEGY_CONFIG: () => DEFAULT_STRATEGY_CONFIG,
+  FIB_LEVELS: () => FIB_LEVELS,
   NO_EVENT: () => NO_EVENT,
   VOLUME_DEAD: () => VOLUME_DEAD,
   VOLUME_DEGRADES_TO_PRICE: () => VOLUME_DEGRADES_TO_PRICE,
@@ -49,6 +50,7 @@ __export(src_exports, {
   cmf: () => cmf,
   computeIndicator: () => computeIndicator,
   confidenceFor: () => confidenceFor,
+  detectSwing: () => detectSwing,
   effectiveMaxScore: () => effectiveMaxScore,
   ema: () => ema,
   evaluateRules: () => evaluateRules,
@@ -1420,6 +1422,7 @@ function programFor(id) {
   CONFIDENCE_SATURATION_SCORE,
   DEFAULT_PROGRAM_ID,
   DEFAULT_STRATEGY_CONFIG,
+  FIB_LEVELS,
   NO_EVENT,
   VOLUME_DEAD,
   VOLUME_DEGRADES_TO_PRICE,
@@ -1442,6 +1445,7 @@ function programFor(id) {
   cmf,
   computeIndicator,
   confidenceFor,
+  detectSwing,
   effectiveMaxScore,
   ema,
   evaluateRules,
@@ -1482,5 +1486,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "b3580b6797916efe131a61f733733b984b89238bf8d8f26c334de747dc9f1ab4";
+module.exports.BUNDLE_SOURCE_HASH = "f1e448cc7e885dfe6a1b1956f8404b596ffd4e9f4b186a6eda0ee5b405948e1f";
 
