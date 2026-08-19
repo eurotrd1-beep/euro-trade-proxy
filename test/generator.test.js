@@ -27,7 +27,8 @@ const SERIES = [
   c(10, 1.0988, 1.099, 1.0984, 1.0986), c(11, 1.0985, 1.0987, 1.0982, 1.0984),
   c(12, 1.0983, 1.0985, 1.098, 1.0982), c(13, 1.0981, 1.0983, 1.0979, 1.098),
   c(14, 1.098, 1.0982, 1.0978, 1.0979), c(15, 1.0979, 1.0981, 1.0977, 1.0978),
-  c(16, 1.0978, 1.098, 1.0972, 1.0974),
+  // The touch, closing ~5 bps past the level so ‹A10› and ‹A11› both hold.
+  c(16, 1.0978, 1.098, 1.0972, 1.0971),
   c(17, 1.097, 1.0972, 1.0958, 1.096),
   c(18, 1.096, 1.0982, 1.0959, 1.098),
   c(19, 1.098, 1.0982, 1.0978, 1.098),
@@ -174,6 +175,54 @@ test.describe('settlement', () => {
     assert.equal(out.outcome, 'tie');
     assert.notEqual(tied.entry_price, close, 'a tie that is just equality proves nothing');
     assert.ok(entry > 0);
+  });
+
+  test.it('records a close that equals the entry as a tie, in both directions', () => {
+    // The degenerate case. A candle that opens and closes on the same number
+    // moved nowhere — CAD/JPY did exactly that on 2026-08-19 — and the row has
+    // to say so, because a `win` here is a settled trade in the statistics
+    // that the strategy never counted, and a `loss` is a martingale it never
+    // took.
+    const close = store[2].c;
+    for (const direction of ['CALL', 'PUT']) {
+      const [out] = gen.__test.settlementFor(
+        [row({ direction, entry_price: close })],
+        lookup,
+        now,
+      );
+      assert.equal(out.price, close);
+      assert.equal(out.outcome, 'tie', direction + ' with entry === exit must be a tie');
+    }
+  });
+
+  test.it('never decides the verdict itself — it is engine.outcomeFor, row by row', () => {
+    // The database stores whatever arrives in this field and does no
+    // arithmetic of its own, so if this ever stopped being the engine's call
+    // the statistics would drift away from the cycles with nothing failing.
+    const close = store[2].c;
+    const rows = [
+      row({ id: 1, direction: 'CALL' }),
+      row({ id: 2, direction: 'PUT' }),
+      row({ id: 3, direction: 'CALL', entry_price: close }),
+      row({ id: 4, direction: 'PUT', entry_price: close + close * 2e-6 }),
+      row({ id: 5, direction: 'CALL', entry_price: close + close * 2e-5 }),
+    ];
+    const out = gen.__test.settlementFor(rows, lookup, now);
+    assert.equal(out.length, rows.length);
+    for (const o of out) {
+      const src = rows.find((r) => r.id === o.id);
+      assert.equal(
+        o.outcome,
+        engine.outcomeFor(src.direction, src.entry_price, close).toLowerCase(),
+        'row ' + o.id + ' was settled by something other than the engine',
+      );
+    }
+    // And the table actually exercises all three verdicts, so the assertion
+    // above is not passing because everything happens to be a loss.
+    assert.deepEqual(
+      [...new Set(out.map((o) => o.outcome))].sort(),
+      ['loss', 'tie', 'win'],
+    );
   });
 
   test.it('marks a trade whose candle is gone as unresolved, never as a tie', () => {

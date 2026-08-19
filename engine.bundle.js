@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 72c524ee9212d31de2fba946b2bcba734cca0826c83cf9f79e745155288c5233
+// engine-source-sha256: 7c2218ce06e78e2953aff150fe3433ea22099c6240c91c1214489beba3aa34d3
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -1204,11 +1204,18 @@ var NO_EVENT = { settled: null, signal: null, cycleEnd: null };
 // packages/engine/src/programs/fib236.ts
 var CLOSENESS_CURVE = 5;
 var FIB = 0.236;
+var MIN_DEPTH_BPS = 3;
+var DEPTH_SLACK_BPS = 1e-9;
+function depthBps(direction, level, price) {
+  const past = direction === "CALL" ? level - price : price - level;
+  return price !== 0 ? past / price * 1e4 : 0;
+}
 var FIRED_MEMORY = 32;
 function blankDiagnostics() {
   return {
     pairsExamined: 0,
     rejectedShape: 0,
+    rejectedTooSmall: 0,
     rejectedSwingTouched: 0,
     rejectedBroken: 0,
     rejectedAlreadyFired: 0,
@@ -1267,6 +1274,10 @@ function findSetup(candles, from, n, firedKeys, diag = blankDiagnostics()) {
     const range = Math.abs(end.price - origin.price);
     if (range <= 0) {
       diag.rejectedShape++;
+      continue;
+    }
+    if (range < 10 * tieEpsilon(end.price)) {
+      diag.rejectedTooSmall++;
       continue;
     }
     const direction = origin.kind === "low" ? "CALL" : "PUT";
@@ -1392,6 +1403,11 @@ var fib236Touch = {
     if (!touches(candle, armed.level)) return { ...NO_EVENT, diagnostics };
     remember(state, armed.key);
     state.armed = null;
+    const heldToClose = armed.direction === "CALL" ? candle.close <= armed.level : candle.close >= armed.level;
+    if (!heldToClose) return { ...NO_EVENT, diagnostics };
+    if (depthBps(armed.direction, armed.level, candle.close) < MIN_DEPTH_BPS - DEPTH_SLACK_BPS) {
+      return { ...NO_EVENT, diagnostics };
+    }
     state.cycle = {
       direction: armed.direction,
       stage: "primary",
@@ -1415,59 +1431,86 @@ function setupCompletion(armed, price) {
 var BAND = {
   pivots: 15,
   rejected: 30,
-  /**
-   * An adopted setup starts here, and the jump from 50 is deliberate.
-   *
-   * Four conditions have to pass before a setup is adopted, and once it is, the
-   * strategy is committed to it: no more searching, one thing left to wait for.
-   * The gap below this band is not wasted scale — it is the distance between
-   * "something might form here" and "this is the one".
-   */
-  armed: 90,
-  /**
-   * The ceilings of the two searching bands.
-   *
-   * Written down rather than taken from the band above, which is what they used
-   * to do — and when the armed band moved from 50 up to 90, both of these
-   * silently moved with it. A pair that had found a leg and refused it started
-   * reading 90: the same number as an adopted setup, for the opposite outcome.
-   * The bands are neighbours, not a formula.
-   */
   pivotsTop: 30,
   rejectedTop: 50,
+  /** A setup is adopted and price is on its way to the level. */
+  armed: 50,
+  /** The level has been touched on this candle. */
+  touched: 90,
+  /** Price is beyond the level — ‹A10› would hold if the candle closed now. */
+  beyond: 95,
+  /** The ‹A11› depth is met too; everything but the close is done. */
+  deep: 98,
   /**
-   * The top of the approach — everything below a touch.
+   * The top of the approach — everything below a confirmed close.
    *
-   * 99.9 rather than a round number, and deliberately never reached: the last
-   * tenth belongs to the touch, and a bar that shows 100 before one has
-   * happened would be claiming a trade the strategy has not been given.
+   * 99.99 rather than a round number, and deliberately never reached: the last
+   * hundredth belongs to the close, and a bar that shows 100 before the candle
+   * has closed would be claiming a trade the strategy has not been given.
    */
-  armedTop: 99.9
+  armedTop: 99.99
 };
 function setupProgress(state, diagnostics, price, candleLeft = 1, touchedThisCandle = false) {
   if (state.cycle !== null) return { stage: "fired", percent: 100 };
   if (state.armed !== null) {
-    const gap = Math.abs(state.armed.level - price);
-    if (touchedThisCandle) {
+    const armed = state.armed;
+    const gap = Math.abs(armed.level - price);
+    const depth = depthBps(armed.direction, armed.level, price);
+    const needBps = Math.max(0, MIN_DEPTH_BPS - DEPTH_SLACK_BPS - depth);
+    const climb = (done) => {
+      const closeness = Math.max(0, Math.min(1, done));
+      const need = Math.max(1 - closeness, 1e-9);
+      const reach = Math.min(1, Math.max(0, candleLeft) / need);
+      return Math.pow(closeness, CLOSENESS_CURVE) * reach;
+    };
+    if (!touchedThisCandle) {
+      const legSize = Math.abs(armed.level - armed.endPrice) / FIB;
+      const travel = Math.max(0, -(depth / 1e4 * price));
+      const done = legSize > 0 ? 1 - travel / legSize : 0;
       return {
         stage: "armed",
-        percent: 100,
-        level: state.armed.level,
-        direction: state.armed.direction,
-        gap: 0
+        percent: BAND.armed + climb(done) * (BAND.touched - BAND.armed),
+        level: armed.level,
+        direction: armed.direction,
+        gap,
+        depthBps: depth,
+        needBps
       };
     }
-    const legSize = Math.abs(state.armed.level - state.armed.endPrice) / FIB;
-    const closeness = legSize > 0 ? Math.max(0, Math.min(1, 1 - gap / legSize)) : 0;
-    const need = Math.max(1 - closeness, 1e-9);
-    const reach = Math.min(1, Math.max(0, candleLeft) / need);
-    const curved = Math.pow(closeness, CLOSENESS_CURVE);
+    if (depth < 0) {
+      const legSize = Math.abs(armed.level - armed.endPrice) / FIB;
+      const back = Math.max(0, -(depth / 1e4 * price));
+      const done = legSize > 0 ? 1 - back / legSize : 0;
+      return {
+        stage: "armed",
+        percent: BAND.touched + climb(done) * (BAND.beyond - BAND.touched),
+        level: armed.level,
+        direction: armed.direction,
+        gap,
+        depthBps: depth,
+        needBps
+      };
+    }
+    if (needBps > 0) {
+      return {
+        stage: "armed",
+        percent: BAND.beyond + climb(1 - needBps / MIN_DEPTH_BPS) * (BAND.deep - BAND.beyond),
+        level: armed.level,
+        direction: armed.direction,
+        gap,
+        depthBps: depth,
+        needBps
+      };
+    }
+    const held = Math.max(0, Math.min(1, 1 - candleLeft));
     return {
       stage: "armed",
-      percent: BAND.armed + curved * reach * (BAND.armedTop - BAND.armed),
-      level: state.armed.level,
-      direction: state.armed.direction,
-      gap
+      percent: BAND.deep + held * (BAND.armedTop - BAND.deep),
+      level: armed.level,
+      direction: armed.direction,
+      gap,
+      depthBps: depth,
+      needBps
     };
   }
   if (diagnostics === null) return { stage: "idle", percent: 0 };
@@ -1585,5 +1628,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "72c524ee9212d31de2fba946b2bcba734cca0826c83cf9f79e745155288c5233";
+module.exports.BUNDLE_SOURCE_HASH = "7c2218ce06e78e2953aff150fe3433ea22099c6240c91c1214489beba3aa34d3";
 

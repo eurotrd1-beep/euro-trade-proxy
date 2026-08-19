@@ -423,34 +423,40 @@ function tick() {
           const last = raw && raw.length > 0 ? raw[raw.length - 1] : null;
           const pct = last ? engine.setupProgress(state, null, last.c).percent : 0;
 
-          // Keyed by the setup, so one opportunity is announced once however
-          // long it hovers at the threshold — and a NEW setup on the same pair
-          // later is a new opportunity and is announced again.
-          // ── A touch, tested the way the strategy tests it ─────────────────
+          // ── Approach, in two steps ────────────────────────────────────
           //
-          // Containment, not "price is past the level". `touches` asks whether
-          // the level lies INSIDE the candle's high and low; a close on the far
-          // side of it satisfies neither that nor anything else. Measured on
-          // recorded candles, the one-sided version was right 6% of the time.
+          // The card shows 96 and 98 as separate states and the phone says the
+          // same two things, for the same reason: a pair that goes from nothing
+          // to a signal at the close reads as if it came out of the air. 96 is
+          // "this may be coming"; 98 is "the depth is already there and only
+          // the close is left". NEITHER is a signal, and the wording says so.
           //
-          // And broken first, in the strategy's own order: a candle that ran
-          // through the leg's end retires the setup before the touch is ever
-          // considered, so a level inside THAT candle produces no trade.
-          const broken =
-            last && (armed.direction === 'CALL' ? last.h > armed.endPrice : last.l < armed.endPrice);
-          const touched =
-            last && !broken && last.l <= armed.level && armed.level <= last.h;
+          // `setupProgress` decides which — it already folds in the touch, ‹A10›
+          // and the ‹A11› depth, so the phone and the card cannot disagree about
+          // how close a pair is. The hand-rolled touch test that used to live
+          // here was a second opinion waiting to drift.
+          //
+          // Latched per SETUP, not per candle: one opportunity says each thing
+          // once however long it hovers, and a new swing on the same pair later
+          // is a new opportunity that may say them again. Sending on every tick
+          // is what teaches somebody to stop reading notifications.
+          const seen = announced.get(symbol);
+          const stage = pct >= 98 ? 98 : pct >= 96 ? 96 : 0;
 
-          if (touched && announced.get(symbol) !== key) {
-            announced.set(symbol, key);
+          if (stage > 0 && (!seen || seen.key !== key || seen.stage < stage)) {
+            announced.set(symbol, { key, stage });
+            const side = armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع';
             announce(
               symbol,
               'armed',
               'custom',
-              `${armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · لمس ${armed.level.toFixed(5)} · الصفقة هتبدأ الشمعة الجاية`,
+              stage === 98
+                ? `${side} · قريب جدًا من إصدار إشارة — ${pct.toFixed(1)}%`
+                : `${side} · يقترب من إصدار إشارة — ${pct.toFixed(1)}%`,
             );
           }
         } else {
+          // The setup is gone: the next opportunity on this pair starts clean.
           announced.delete(symbol);
         }
 
@@ -459,8 +465,12 @@ function tick() {
           // the next one — so it arrives a full candle before the entry, which
           // is the only warning that is any use to somebody who has to place
           // the trade themselves.
+          // The ONLY notification that means a signal exists. Sent when the
+          // program returns one — after the candle closed and ‹A7›‹A10›‹A11› all
+          // held — never at 96, never at 98, and never because price crossed the
+          // depth mid-candle and came back.
           const body =
-            `الصفقة على الشمعة الجاية · ${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
+            `🚨 اتأكدت الإشارة · الصفقة على الشمعة الجاية · ${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
             (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : '');
 
           announce(symbol, 'signal', 'custom', body);
@@ -613,11 +623,19 @@ async function flush() {
  * to run. That is what keeps one truth: the outcome in the database and the
  * outcome that decided whether a martingale followed are the same event.
  *
- * One known seam, stated rather than hidden: `resolve_signals` calls a tie on
- * exact equality, while the engine allows a hair of tolerance
- * (`tieEpsilon`, 0.0005% of the entry). A close that lands inside that band is
- * a tie to the strategy and a win or a loss to the statistics. Closing it needs
- * the outcome to be passed in rather than recomputed, which is a migration.
+ * There used to be a seam here, and this is the note that said so: the
+ * database recomputed the verdict with exact equality while the engine allowed
+ * `tieEpsilon` — 0.0005% of the entry — so a close inside that band was a tie
+ * to the strategy and a win or a loss to the statistics. It was closed by
+ * `20260818_unified_settlement.sql`: `resolve_signals` now STORES the
+ * `outcome` sent below and computes nothing. Verified against the live table —
+ * of 3,708 settled one-minute rows, none sits inside the band with a verdict
+ * other than `tie`, and the last row that did was written before the
+ * migration.
+ *
+ * So the field matters: whatever is put in `outcome` is what the statistics
+ * will say. It must stay `engine.outcomeFor(...)` and never a second reading
+ * of the two prices.
  */
 async function resolveNow(rows) {
   if (!db || rows.length === 0) return;
