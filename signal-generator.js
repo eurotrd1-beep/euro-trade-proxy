@@ -127,29 +127,7 @@ try {
 }
 
 const push = require('./push.js');
-
-/**
- * Which pairs have already been announced, so nobody is told twice.
- *
- * Keyed by symbol, holding the identity of the setup that was announced. The
- * program rebuilds an armed setup from the candles on every tick, so without
- * this the same opportunity would be pushed once a minute for as long as it
- * stood — which is the fastest way to make somebody turn notifications off.
- */
-const announced = new Map();
-
-/**
- * ── ONLY TWO THINGS ARE WORTH A NOTIFICATION ───────────────────────────────
- *
- * A touch, which means the trade opens on the next candle, and the trade
- * actually opening. Nothing else.
- *
- * There used to be a third: a pair crossing 85% of the way to its level, sent
- * as "most conditions met, get ready". It was true and it was useless — a
- * possibility, arriving often, in the same shade as the two messages that mean
- * something. A phone that buzzes for possibilities teaches its owner to ignore
- * it, and then the certainty arrives in a queue with the maybes.
- */
+const { createAlerts } = require('./push-alerts.js');
 
 /**
  * A pair's display name, for a notification the user reads at a glance.
@@ -166,53 +144,50 @@ function displayName(symbol) {
 }
 
 /**
- * Tells everyone a setup is forming, or that a trade just opened.
+ * ── THE NOTIFICATIONS, REBUILT ─────────────────────────────────────────────
  *
- * Both plans run the same program, so the loop below reaches this twice for
- * one event — hence the guard on plan. Sending it once and delivering to
- * everybody is right while the two plans share a strategy; the day they stop
- * sharing one, this is where the split goes.
+ * What used to be here: one message when a setup was touched, claiming the
+ * trade would open on the next candle, and one when it did. The first of those
+ * became a lie the day ‹A10› and ‹A11› arrived — a touch stopped being the last
+ * condition, and most touches now produce nothing at all.
+ *
+ * What is here instead is a ladder of three, owned by `push-alerts.js`: 96, 98
+ * and the signal itself. That module holds the rule that each rung is sent at
+ * most once per setup and never out of order; this file's job is only to hand
+ * it a pair, a percentage and the identity of the setup they belong to.
+ *
+ * The claim is durable so a redeploy in the middle of an opportunity does not
+ * announce it twice — see `push_alerts` and the note in that module.
  */
-function announce(symbol, kind, channel, body) {
-  if (!push.isReady() || !db) return;
-  const title =
-    kind === 'signal'
-      ? `إشارة بدأت — ${displayName(symbol)}`
-      : kind === 'leader'
-        ? `أقرب فرصة دلوقتي — ${displayName(symbol)}`
-        : `فرصة بتتكوّن — ${displayName(symbol)}`;
-  void push
-    .broadcast(db, { kind, channel, symbol, title, body, at: Date.now() })
-    .then((r) => {
-      if (r.sent > 0 || r.removed > 0) {
-        log(`إشعار ${kind}/${channel} ${symbol} · وصل ${r.sent} · اتشال ${r.removed}`);
-      }
-    })
-    .catch((e) => err('إشعار فشل:', e.message));
-}
-
-/**
- * ── The general channel is gone ────────────────────────────────────────────
- *
- * It announced whichever unchosen pair was closest to firing, and it existed
- * because a subscriber who had named no pairs was being told about all 89.
- * Users now choose their pairs before anything runs, so there is no such thing
- * as an unchosen pair being watched, and nothing left for that channel to
- * carry. `generalTrade` stays: the quiet period during a trade is still real.
- *
- * Recoverable from git — `fad7fa1` — if the coverage is ever wanted back. It is
- * deleted rather than switched off, because code that never runs is never
- * tested and a flag that is always false is a lie the code tells about itself.
- */
-
-/**
- * The pair whose trade is running, if any.
- *
- * While this is set the general channel says nothing at all. It clears when
- * that pair's cycle ends, which is the program's own answer rather than a timer
- * that could drift out of step with a martingale.
- */
-let generalTrade = null;
+const alerts = createAlerts({
+  async claim(symbol, setupKey, stage) {
+    if (!db) return true; // no database: memory is the only guard, and it is on
+    const { error } = await db
+      .from('push_alerts')
+      .insert({ symbol, setup_key: setupKey, stage });
+    // 23505 is the primary key doing its job: somebody already sent this one.
+    if (error && error.code === '23505') return false;
+    if (error) throw new Error(error.message);
+    return true;
+  },
+  async deliver(symbol, stage, title, body) {
+    if (!push.isReady() || !db) return;
+    const r = await push.broadcast(db, {
+      kind: stage === 100 ? 'signal' : 'armed',
+      channel: 'custom',
+      symbol,
+      title,
+      body,
+      at: Date.now(),
+    });
+    if (r.sent > 0 || r.removed > 0) {
+      log(`إشعار ${stage} ${symbol} · وصل ${r.sent} · اتشال ${r.removed}`);
+    }
+  },
+  onError(e) {
+    err('إشعار:', e.message);
+  },
+});
 
 // ── Alerts ──────────────────────────────────────────────────────────────────
 
@@ -361,6 +336,38 @@ function toEngine(c) {
  * forming — the same call the app makes, so this process cannot reach a
  * different conclusion from a user's device on the same data.
  */
+/**
+ * The percentage the CARD is showing for this pair, right now.
+ *
+ * Not a second opinion: `setupProgress` is the same function the app calls, and
+ * it is given the same two live inputs, because without them it answers a
+ * different question. `candleLeft` is what makes the reading move between
+ * closes, and `touchedThisCandle` is a fact about a moment that has passed —
+ * price can reach the level and drift away, and a reading taken from where
+ * price is now would forget it happened.
+ *
+ * Broken first and containment second, in the strategy's own order: a candle
+ * that ran through the leg's end retires the setup before a touch is ever
+ * considered.
+ */
+function liveProgress(state, symbol) {
+  const raw = storeFor(symbol);
+  if (!raw || raw.length === 0) return 0;
+  const last = raw[raw.length - 1];
+  const step = STEP_SECONDS * 1000;
+  const opened = last.t * 1000;
+  const remaining = opened + step - Date.now();
+  const left = remaining > 0 ? Math.max(0, Math.min(1, remaining / step)) : 1;
+
+  const armed = state.armed;
+  let touched = false;
+  if (armed) {
+    const broken = armed.direction === 'CALL' ? last.h > armed.endPrice : last.l < armed.endPrice;
+    touched = !broken && last.l <= armed.level && armed.level <= last.h;
+  }
+  return engine.setupProgress(state, null, last.c, left, touched).percent;
+}
+
 /** The newest candle that has actually closed — the one the program just read. */
 function lastClosed(candles) {
   const now = Date.now();
@@ -384,6 +391,10 @@ function tick() {
       const state = stateFor(plan, symbol);
       stats.evaluated++;
 
+      // Captured before the call: firing clears `state.armed`, and the setup's
+      // identity is what the notification is filed under.
+      const armedBefore = state.armed;
+
       let event;
       try {
         event = PROGRAM.onCandleClose(
@@ -395,99 +406,40 @@ function tick() {
         continue;
       }
 
-      // Notifications, once per symbol rather than once per plan. Sent before
-      // the row is built because a trade opening is the thing the user asked
-      // to be woken for, and it must not wait on a database write.
+      // Notifications, once per symbol rather than once per plan. Both plans
+      // run the same program, so without this guard the loop reaches here twice
+      // for one event.
       if (plan === PLANS[0].plan) {
-        // ── The custom channel ────────────────────────────────────────────
-        //
-        // A pair somebody named. No ranking, no margin, no quiet period: they
-        // asked to be told about this pair. `broadcast` delivers only to the
-        // subscribers who listed this symbol.
-        //
-        // WHEN, though, changed. It used to fire the moment a setup was
-        // adopted, which on the progress scale is the halfway mark: the leg is
-        // confirmed and the level is drawn, but price may be most of a leg away
-        // and may never come back. That is an alert about a possibility, and
-        // enough of them arrive that the useful ones stop being read.
-        //
-        // Now it waits for the pair to be genuinely close, and the trade
-        // opening is announced separately below — which lands exactly one
-        // candle before the entry, since the touch happens on one candle and
-        // the trade opens on the next.
-        const armed = state.armed;
-        const key = armed ? armed.key : null;
+        // The setup this moment belongs to. On the tick a signal fires the
+        // program has already cleared `state.armed`, so the identity has to
+        // come from what it was BEFORE the call — otherwise the 100 would be
+        // filed under no setup at all and could repeat.
+        const setupKey = event.signal !== null && event.signal.stage === 'primary'
+          ? armedBefore && armedBefore.key
+          : state.armed && state.armed.key;
 
-        if (key !== null) {
-          const raw = storeFor(symbol);
-          const last = raw && raw.length > 0 ? raw[raw.length - 1] : null;
-          const pct = last ? engine.setupProgress(state, null, last.c).percent : 0;
-
-          // ── Approach, in two steps ────────────────────────────────────
-          //
-          // The card shows 96 and 98 as separate states and the phone says the
-          // same two things, for the same reason: a pair that goes from nothing
-          // to a signal at the close reads as if it came out of the air. 96 is
-          // "this may be coming"; 98 is "the depth is already there and only
-          // the close is left". NEITHER is a signal, and the wording says so.
-          //
-          // `setupProgress` decides which — it already folds in the touch, ‹A10›
-          // and the ‹A11› depth, so the phone and the card cannot disagree about
-          // how close a pair is. The hand-rolled touch test that used to live
-          // here was a second opinion waiting to drift.
-          //
-          // Latched per SETUP, not per candle: one opportunity says each thing
-          // once however long it hovers, and a new swing on the same pair later
-          // is a new opportunity that may say them again. Sending on every tick
-          // is what teaches somebody to stop reading notifications.
-          const seen = announced.get(symbol);
-          const stage = pct >= 98 ? 98 : pct >= 96 ? 96 : 0;
-
-          if (stage > 0 && (!seen || seen.key !== key || seen.stage < stage)) {
-            announced.set(symbol, { key, stage });
-            const side = armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع';
-            announce(
-              symbol,
-              'armed',
-              'custom',
-              stage === 98
-                ? `${side} · قريب جدًا من إصدار إشارة — ${pct.toFixed(1)}%`
-                : `${side} · يقترب من إصدار إشارة — ${pct.toFixed(1)}%`,
-            );
-          }
+        if (event.signal !== null && event.signal.stage === 'primary') {
+          // 100. Tied to the program RETURNING a signal — a closed candle that
+          // satisfied every rule — and to nothing else. Not to a percentage, not
+          // to a card, and not to price crossing the depth mid-candle.
+          void alerts.at({
+            symbol,
+            name: displayName(symbol),
+            setupKey,
+            percent: 100,
+            fired: true,
+          });
+        } else if (setupKey) {
+          // 96 and 98, from the same number the card shows.
+          void alerts.at({
+            symbol,
+            name: displayName(symbol),
+            setupKey,
+            percent: liveProgress(state, symbol),
+          });
         } else {
-          // The setup is gone: the next opportunity on this pair starts clean.
-          announced.delete(symbol);
+          alerts.forget(symbol);
         }
-
-        if (event.signal !== null) {
-          // Sent on the candle the touch happened, for a trade that opens on
-          // the next one — so it arrives a full candle before the entry, which
-          // is the only warning that is any use to somebody who has to place
-          // the trade themselves.
-          // The ONLY notification that means a signal exists. Sent when the
-          // program returns one — after the candle closed and ‹A7›‹A10›‹A11› all
-          // held — never at 96, never at 98, and never because price crossed the
-          // depth mid-candle and came back.
-          const body =
-            `🚨 اتأكدت الإشارة · الصفقة على الشمعة الجاية · ${event.signal.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · ${PROGRAM.durationMinutes} دقيقة` +
-            (event.signal.stage === 'martingale' ? ' · مضاعفة تعويض' : '');
-
-          announce(symbol, 'signal', 'custom', body);
-
-          // The general channel hears about a trade opening — that is the
-          // payoff of the leader it was following, and the last thing it will
-          // hear until the trade is over.
-          if (generalTrade === null) {
-            generalTrade = symbol;
-            announce(symbol, 'signal', 'general', body);
-          }
-        }
-
-        // Silence ends when the program says the cycle is finished, not on a
-        // timer: a martingale extends the cycle, and a clock would reopen the
-        // channel in the middle of the recovery trade.
-        if (event.cycleEnd !== null && generalTrade === symbol) generalTrade = null;
       }
 
       // A trade is recorded when it SETTLES, with the two prices the program
