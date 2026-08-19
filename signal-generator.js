@@ -802,7 +802,8 @@ async function start() {
   setInterval(() => { void rollup(); }, ROLLUP_MS);
   setInterval(() => { void prune(); }, PRUNE_MS);
 
-  // The daily summary watches for the UTC day to roll over. It lives in this
+  // The daily summary watches for the day to roll over — UTC plus whatever
+  // offset the admin set, so it lands at the reader's midnight. It lives in this
   // process because this process is the one that never stops — a scheduler on
   // a laptop is a scheduler that runs when the laptop is open.
   telegram.startScheduler();

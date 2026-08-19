@@ -13,9 +13,13 @@
  *
  *   SIGNAL_OPENED  the program returned a signal and the trade opens on the
  *                  next candle. Not at 96, not at 98 — those stay on the card.
- *   TRADE_RESULT   that trade settled. WIN, LOSS or DRAW, from the settlement
- *                  itself rather than from a comparison written here.
- *   DAILY_SUMMARY  once, after the UTC day ends.
+ *   TRADE_RESULT   that trade settled. WIN, LOSS or TIE, from the settlement
+ *                  itself rather than from a comparison written here. Which of
+ *                  those three go out is the ONE setting that looks at an
+ *                  outcome; see `outcomes` below.
+ *   DAILY_SUMMARY  once, after the day ends — the day being UTC plus the
+ *                  configured offset, so it lands at the operator's midnight
+ *                  rather than at Greenwich's.
  *
  * ── ONCE, THROUGH RESTARTS AND CONCURRENCY ─────────────────────────────────
  *
@@ -98,6 +102,26 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
   let dailyOn = true;
   /** 'both' | 'signals' | 'results' — which KINDS go out, never which outcomes. */
   let publishMode = 'both';
+  /**
+   * 'all' | 'wins' | 'losses' — the one setting here that reads an outcome.
+   *
+   * Every other filter is decided before the outcome exists, on purpose: a
+   * signal that goes out is a prediction that then stands or falls in public.
+   * This one is applied at the result, and the admin says out loud what that
+   * costs — with `wins` the channel's record of results is no longer a record,
+   * because the losses happened and simply were not written.
+   */
+  let outcomes = 'all';
+  /**
+   * Minutes to add to UTC to reach the day the summary is about.
+   *
+   * Everything else in this system buckets by the UTC day — the rollups, the
+   * pruning, the admin's date ranges — and none of that moves. This shifts the
+   * SUMMARY alone, because "end of the day" is a claim about the reader's day,
+   * and a summary that arrives at 03:00 local has already been overtaken by
+   * the next day's trades.
+   */
+  let summaryOffsetMin = 0;
   let checkedAt = 0;
 
   /**
@@ -129,6 +153,15 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
       dailyOn = data?.data?.daily !== false;
       const mode = data?.data?.publish;
       publishMode = mode === 'signals' || mode === 'results' ? mode : 'both';
+      // Absent means every result, which is what this did before the setting
+      // existed. Only the two words are honoured — a typo publishes normally
+      // rather than silencing the channel.
+      const oc = data?.data?.outcomes;
+      outcomes = oc === 'wins' || oc === 'losses' ? oc : 'all';
+      // Clamped to real offsets. A stray number here would not fail loudly —
+      // it would quietly summarise a window nobody asked for.
+      const off = Number(data?.data?.summaryOffsetMinutes);
+      summaryOffsetMin = Number.isFinite(off) ? Math.max(-840, Math.min(840, Math.trunc(off))) : 0;
     } catch (e) {
       err('telegram config:', e.message);
     }
@@ -283,6 +316,24 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
   }) {
     if (!(await isEnabled())) return false;
     if (publishMode === 'signals') return false;
+
+    // ── The outcome filter ───────────────────────────────────────────────
+    //
+    // Read before the eligibility lookup only because it is free and that is
+    // a round trip to the database; the order carries no meaning beyond that.
+    //
+    // A TIE passes neither `wins` nor `losses`. It is not a win, and folding
+    // it into one would make "الفوز بس" mean something other than its name —
+    // the reader would count a returned stake as a call that came off.
+    //
+    // Nothing is claimed on this path, so a filtered result does not burn its
+    // event key. It cannot come back either — a trade settles once — but a key
+    // marked "sent" for a message that was never sent is a lie in the table.
+    if (outcomes !== 'all') {
+      if (outcomes === 'wins' && result !== 'WIN') return false;
+      if (outcomes === 'losses' && result !== 'LOSS') return false;
+    }
+
     // Only for a trade that cleared the bar when it opened. Otherwise a
     // filtered channel would report trades it never called.
     if (!(await wasEligible(symbol, entryTime, stage))) return false;
@@ -313,8 +364,13 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
       if (!dailyOn) return false;
       if (!db) return false;
 
-      const from = `${day}T00:00:00Z`;
-      const to = `${day}T23:59:59.999Z`;
+      // The 24 hours that make up `day` in the configured zone, expressed in
+      // UTC because that is what `bar_time` is stored in. At offset zero this
+      // is exactly the old `T00:00:00Z` … `T23:59:59.999Z` pair; at +3 it is
+      // the window that ends at the operator's midnight instead of Greenwich's.
+      const startUtc = Date.parse(`${day}T00:00:00Z`) - summaryOffsetMin * 60_000;
+      const from = new Date(startUtc).toISOString();
+      const to = new Date(startUtc + 24 * 3600_000 - 1).toISOString();
       const { data, error } = await db
         .from('signals')
         .select('symbol, bar_time, outcome')
@@ -341,8 +397,12 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
 
       const decided = win + loss;
       const rate = decided > 0 ? ((100 * win) / decided).toFixed(1) : '—';
+      // Named when it is not UTC. The rest of the system counts UTC days — the
+      // admin's ranges, the rollups — so a summary over a different window has
+      // to say so, or the first person to compare the two numbers concludes
+      // one of them is broken.
       const text = [
-        `📊 ملخص ${day}`,
+        `📊 ملخص ${day}${summaryOffsetMin === 0 ? '' : ` (بتوقيت ${zoneLabel()})`}`,
         `الصفقات اللي اتفتحت: ${open}`,
         `✅ ربح: ${win}`,
         `❌ خسارة: ${loss}`,
@@ -369,27 +429,52 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
     }
   }
 
-  /** Yesterday in UTC, as `YYYY-MM-DD`. */
+  /** `UTC+3`, `UTC-4:30`, for a summary that is not about a UTC day. */
+  function zoneLabel() {
+    const sign = summaryOffsetMin < 0 ? '-' : '+';
+    const abs = Math.abs(summaryOffsetMin);
+    const h = Math.floor(abs / 60);
+    const m = abs % 60;
+    return `UTC${sign}${h}${m === 0 ? '' : `:${pad(m)}`}`;
+  }
+
+  /**
+   * The day that just ended, as `YYYY-MM-DD` in the configured zone.
+   *
+   * Shifting the clock before taking the date is the whole trick: at 21:05 UTC
+   * with a +3 offset it is already tomorrow for the reader, so the day that
+   * just ended is today's date — and three hours later, at 00:05 UTC, it is
+   * still that same date, so the check that runs then finds the key claimed
+   * and does nothing. One summary per day, at the reader's midnight.
+   */
   function previousDay() {
-    return new Date(now() - 24 * 3600_000).toISOString().slice(0, 10);
+    return new Date(now() + summaryOffsetMin * 60_000 - 24 * 3600_000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   /**
    * Watches for the day to roll over.
    *
    * A plain interval rather than a cron: this process is always running, and
-   * the claim makes a repeated check free. It runs every five minutes, which
-   * means the summary lands within five minutes of 00:00 UTC — and if the
-   * service was asleep or redeploying at midnight, the next check after it
+   * the claim makes a repeated check free. It runs every five minutes, so the
+   * summary lands within five minutes of midnight in the configured zone — and
+   * if the service was asleep or redeploying then, the next check after it
    * comes back still sends it, because the key is the DATE and not the moment.
    */
   function startScheduler() {
     if (!configured) return null;
-    const tick = () => {
-      void dailySummary(previousDay());
+    // The config is read FIRST, because the offset decides which day this even
+    // is. Without it the first check after a restart asks about the UTC day
+    // and claims that key — and the day the reader is waiting for never comes.
+    // `isEnabled` caches for half a minute, so at a five-minute cadence this
+    // is one extra row read per check.
+    const tick = async () => {
+      await isEnabled();
+      await dailySummary(previousDay());
     };
-    tick();
-    return setInterval(tick, DAILY_CHECK_MS);
+    void tick();
+    return setInterval(() => { void tick(); }, DAILY_CHECK_MS);
   }
 
   return {

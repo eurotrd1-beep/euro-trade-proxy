@@ -19,17 +19,22 @@ const { createTelegram } = require('../telegram.js');
  */
 function fakeDb({
   enabled = true, claimed = new Set(), signals = [], failClaim = false, minDepthBps = 0,
-  daily = true, publish = 'both',
+  daily = true, publish = 'both', outcomes = 'all', summaryOffsetMinutes = 0,
 } = {}) {
+  /** Every window the daily summary asked `signals` for, in order. */
+  const ranges = [];
   return {
     claimed,
+    ranges,
     from(table) {
       if (table === 'configs') {
         return {
           select: () => ({
             eq: () => ({
               maybeSingle: async () => ({
-                data: { data: { enabled, minDepthBps, daily, publish } },
+                data: {
+                  data: { enabled, minDepthBps, daily, publish, outcomes, summaryOffsetMinutes },
+                },
                 error: null,
               }),
             }),
@@ -64,8 +69,13 @@ function fakeDb({
       return {
         select: () => ({
           eq: () => ({
-            gte: () => ({
-              lte: () => ({ limit: async () => ({ data: signals, error: null }) }),
+            gte: (_c, from) => ({
+              lte: (_c2, to) => ({
+                limit: async () => {
+                  ranges.push({ from, to });
+                  return { data: signals, error: null };
+                },
+              }),
             }),
           }),
         }),
@@ -304,6 +314,155 @@ test.describe('the daily summary', () => {
       err() {},
       now: () => Date.parse('2026-08-20T00:03:00Z'),
     });
+    assert.equal(tg.previousDay(), '2026-08-19');
+  });
+});
+
+/**
+ * The outcome filter — the one setting that reads how a trade ended.
+ *
+ * These pin the two ways it can be wrong in opposite directions: publishing
+ * what was meant to be held back (the bug this fixes — losses going out under
+ * «الفوز بس»), and holding back everything, which from outside looks exactly
+ * like Telegram being down.
+ */
+test.describe('which OUTCOMES go out', () => {
+  const settled = (result) => ({ ...TRADE, result, entryPrice: 1.1, exitPrice: 1.2 });
+
+  async function publishedUnder(outcomes, result) {
+    const net = stubHttps();
+    try {
+      const db = fakeDb({ outcomes });
+      const tg = createTelegram({ db, log() {}, err() {} });
+      db.claimed.add(`elig:${TRADE.symbol}:${TRADE.entryTime}:${TRADE.stage}`);
+      await tg.tradeResult(settled(result));
+      return net.calls.length === 1;
+    } finally {
+      net.restore();
+    }
+  }
+
+  test.it('publishes every outcome when it is set to all', async () => {
+    assert.equal(await publishedUnder('all', 'WIN'), true);
+    assert.equal(await publishedUnder('all', 'LOSS'), true);
+    assert.equal(await publishedUnder('all', 'TIE'), true);
+  });
+
+  test.it('holds the loss back under wins-only — the bug this fixes', async () => {
+    assert.equal(await publishedUnder('wins', 'WIN'), true);
+    assert.equal(await publishedUnder('wins', 'LOSS'), false);
+    assert.equal(await publishedUnder('wins', 'TIE'), false);
+  });
+
+  test.it('holds the win back under losses-only', async () => {
+    assert.equal(await publishedUnder('losses', 'LOSS'), true);
+    assert.equal(await publishedUnder('losses', 'WIN'), false);
+    assert.equal(await publishedUnder('losses', 'TIE'), false);
+  });
+
+  test.it('treats an unknown value as all, rather than as silence', async () => {
+    assert.equal(await publishedUnder('WINS', 'LOSS'), true);
+  });
+
+  test.it('does not mark a filtered result as sent', async () => {
+    const net = stubHttps();
+    try {
+      const db = fakeDb({ outcomes: 'wins' });
+      const tg = createTelegram({ db, log() {}, err() {} });
+      const elig = `elig:${TRADE.symbol}:${TRADE.entryTime}:${TRADE.stage}`;
+      db.claimed.add(elig);
+      await tg.tradeResult(settled('LOSS'));
+      assert.deepEqual(
+        [...db.claimed],
+        [elig],
+        'no result key may be claimed for a message that was never sent',
+      );
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('leaves the opening alone — there is no outcome to filter on yet', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({ db: fakeDb({ outcomes: 'wins' }), log() {}, err() {} });
+      await tg.signalOpened(TRADE);
+      assert.equal(net.calls.length, 1);
+    } finally {
+      net.restore();
+    }
+  });
+});
+
+/**
+ * The summary's day.
+ *
+ * It used to be the UTC day, always, which for an operator at UTC+3 meant the
+ * message about their day arrived at 03:00 the next morning — after the next
+ * day's trades had already started. The offset moves that boundary and, with
+ * it, the 24 hours the numbers cover. Nothing else moves: the rollups and the
+ * admin's ranges stay on UTC days, which is why the message names the zone
+ * whenever it is not UTC.
+ */
+test.describe('the summary follows the day the reader lives in', () => {
+  const at = (iso) => () => Date.parse(iso);
+
+  test.it('is unchanged at offset zero', async () => {
+    const net = stubHttps();
+    try {
+      const db = fakeDb();
+      const tg = createTelegram({ db, log() {}, err() {} });
+      await tg.dailySummary('2026-08-19');
+      assert.deepEqual(db.ranges[0], {
+        from: '2026-08-19T00:00:00.000Z',
+        to: '2026-08-19T23:59:59.999Z',
+      });
+      assert.ok(!net.calls[0].body.text.includes('بتوقيت'), 'a UTC day names no zone');
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('counts the 24 hours that end at the reader midnight', async () => {
+    const net = stubHttps();
+    try {
+      const db = fakeDb({ summaryOffsetMinutes: 180 });
+      const tg = createTelegram({ db, log() {}, err() {} });
+      await tg.dailySummary('2026-08-19');
+      assert.deepEqual(db.ranges[0], {
+        from: '2026-08-18T21:00:00.000Z',
+        to: '2026-08-19T20:59:59.999Z',
+      });
+      assert.ok(net.calls[0].body.text.includes('UTC+3'), net.calls[0].body.text);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('picks the day that just ended for the reader, not for Greenwich', async () => {
+    const db = fakeDb({ summaryOffsetMinutes: 180 });
+    // 21:05 UTC on the 19th is 00:05 on the 20th at +3: the reader's day has
+    // just ended, and the day that ended was the 19th.
+    const tg = createTelegram({ db, log() {}, err() {}, now: at('2026-08-19T21:05:00Z') });
+    await tg.isEnabled();
+    assert.equal(tg.previousDay(), '2026-08-19');
+  });
+
+  test.it('still names that same day three hours later, so it is sent once', async () => {
+    const db = fakeDb({ summaryOffsetMinutes: 180 });
+    const tg = createTelegram({ db, log() {}, err() {}, now: at('2026-08-20T00:05:00Z') });
+    await tg.isEnabled();
+    assert.equal(
+      tg.previousDay(),
+      '2026-08-19',
+      'the UTC rollover must not start a second summary',
+    );
+  });
+
+  test.it('ignores a nonsense offset instead of summarising a random window', async () => {
+    const db = fakeDb({ summaryOffsetMinutes: 'صباحًا' });
+    const tg = createTelegram({ db, log() {}, err() {}, now: at('2026-08-20T00:05:00Z') });
+    await tg.isEnabled();
     assert.equal(tg.previousDay(), '2026-08-19');
   });
 });
