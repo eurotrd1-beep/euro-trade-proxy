@@ -19,7 +19,7 @@ const { createTelegram } = require('../telegram.js');
  */
 function fakeDb({
   enabled = true, claimed = new Set(), signals = [], failClaim = false, minDepthBps = 0,
-  daily = true,
+  daily = true, publish = 'both',
 } = {}) {
   return {
     claimed,
@@ -29,7 +29,7 @@ function fakeDb({
           select: () => ({
             eq: () => ({
               maybeSingle: async () => ({
-                data: { data: { enabled, minDepthBps, daily } },
+                data: { data: { enabled, minDepthBps, daily, publish } },
                 error: null,
               }),
             }),
@@ -352,7 +352,11 @@ test.describe('failure never reaches the engine', () => {
     const tg = createTelegram({ db, log() {}, err() {} });
     try {
       await tg.signalOpened(TRADE);
-      assert.equal(db.claimed.size, 0, 'a failed send must not look like a sent one');
+      const key = `signal:${TRADE.symbol}:${TRADE.entryTime}:${TRADE.stage}`;
+      assert.equal(db.claimed.has(key), false, 'a failed send must not look like a sent one');
+      // Eligibility is NOT released: it records that the trade cleared the bar
+      // when it opened, which a Telegram outage does not change.
+      assert.equal(db.claimed.has(`elig:${TRADE.symbol}:${TRADE.entryTime}:${TRADE.stage}`), true);
     } finally {
       net.restore();
     }
@@ -515,6 +519,86 @@ test.describe('the daily summary switch', () => {
         err() {},
       });
       assert.equal(await tg.dailySummary('2026-08-19'), true);
+    } finally {
+      net.restore();
+    }
+  });
+});
+
+
+test.describe('which KINDS go out', () => {
+  const settled = { ...TRADE, result: 'LOSS', entryPrice: 1.17391, exitPrice: 1.175 };
+
+  test.it('sends both by default', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({ db: fakeDb(), log() {}, err() {} });
+      await tg.signalOpened(TRADE);
+      await tg.tradeResult(settled);
+      assert.equal(net.calls.length, 2);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('sends openings only', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({ db: fakeDb({ publish: 'signals' }), log() {}, err() {} });
+      await tg.signalOpened(TRADE);
+      await tg.tradeResult(settled);
+      assert.equal(net.calls.length, 1);
+      assert.ok(net.calls[0].body.text.includes('اتفتحت'), net.calls[0].body.text);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('sends results only', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({ db: fakeDb({ publish: 'results' }), log() {}, err() {} });
+      await tg.signalOpened(TRADE);
+      await tg.tradeResult(settled);
+      assert.equal(net.calls.length, 1);
+      assert.ok(net.calls[0].body.text.includes('خسارة'), net.calls[0].body.text);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('reports the LOSS as a loss in every mode', async () => {
+    // The mode chooses kinds, never outcomes. A published result is whatever
+    // the settlement said it was.
+    for (const publish of ['both', 'results']) {
+      const net = stubHttps();
+      try {
+        const tg = createTelegram({ db: fakeDb({ publish }), log() {}, err() {} });
+        await tg.signalOpened(TRADE);
+        await tg.tradeResult(settled);
+        const text = net.calls.at(-1).body.text;
+        assert.ok(text.includes('خسارة'), `${publish}: ${text}`);
+      } finally {
+        net.restore();
+      }
+    }
+  });
+
+  test.it('in results-only, still respects the bar set at the opening', async () => {
+    const net = stubHttps();
+    try {
+      const db = fakeDb({ publish: 'results', minDepthBps: 5 });
+      const tg = createTelegram({ db, log() {}, err() {} });
+      // Below the bar: never eligible, so its result stays unpublished too.
+      await tg.signalOpened({ ...TRADE, depthBps: 2 });
+      await tg.tradeResult(settled);
+      assert.equal(net.calls.length, 0);
+
+      // Above it: eligible at the opening, so the result goes out.
+      const other = { ...TRADE, symbol: 'GBPJPY', entryTime: TRADE.entryTime + 60_000 };
+      await tg.signalOpened({ ...other, depthBps: 9 });
+      await tg.tradeResult({ ...other, result: 'WIN', entryPrice: 1, exitPrice: 1.1 });
+      assert.equal(net.calls.length, 1);
     } finally {
       net.restore();
     }

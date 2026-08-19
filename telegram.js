@@ -96,6 +96,8 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
   let enabled = false;
   let minDepthBps = 0;
   let dailyOn = true;
+  /** 'both' | 'signals' | 'results' — which KINDS go out, never which outcomes. */
+  let publishMode = 'both';
   let checkedAt = 0;
 
   /**
@@ -125,6 +127,8 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
       // Absent means on: the summary predates this switch, and a missing field
       // should not silently stop something that was already running.
       dailyOn = data?.data?.daily !== false;
+      const mode = data?.data?.publish;
+      publishMode = mode === 'signals' || mode === 'results' ? mode : 'both';
     } catch (e) {
       err('telegram config:', e.message);
     }
@@ -217,6 +221,25 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
       if (!Number.isFinite(depthBps) || depthBps < minDepthBps) return false;
     }
 
+    // ── Eligibility is recorded whatever the mode is ─────────────────────
+    //
+    // It says "this trade cleared the bar", and it is written the moment the
+    // trade opens — before any outcome exists. The result later checks for it,
+    // so a channel set to results-only still reports the results of the trades
+    // it WOULD have announced rather than an arbitrary subset.
+    //
+    // Separate from the `signal:` key because the two answer different
+    // questions: one is "was it worth publishing", the other is "was it".
+    try {
+      await claim(`elig:${symbol}:${entryTime}:${stage}`, 'eligible');
+    } catch (e) {
+      err('telegram eligibility:', e.message);
+    }
+
+    // The mode picks which KINDS of message go out. It never looks at an
+    // outcome, and it cannot: at this point there is not one.
+    if (publishMode === 'results') return false;
+
     const key = `signal:${symbol}:${entryTime}:${stage}`;
     const lines = [
       `🚨 اتفتحت إشارة — ${name}`,
@@ -235,22 +258,22 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
    * That trade settled. Tied to the same trade by the same key parts, so the
    * result of one pair can never be attached to another's.
    */
-  /** Was this trade's opening published? One indexed lookup on the key. */
-  async function wasAnnounced(symbol, entryTime, stage) {
+  /** Did this trade clear the bar when it opened? One indexed lookup. */
+  async function wasEligible(symbol, entryTime, stage) {
     if (!db) return true;
     try {
       const { data, error } = await db
         .from('telegram_alerts')
         .select('event_key')
-        .eq('event_key', `signal:${symbol}:${entryTime}:${stage}`)
+        .eq('event_key', `elig:${symbol}:${entryTime}:${stage}`)
         .maybeSingle();
       if (error) throw new Error(error.message);
       return data != null;
     } catch (e) {
       err('telegram lookup:', e.message);
       // Unknown: say nothing rather than post a result for a trade the channel
-      // never saw open. A missing result is a gap; an orphan result is a lie
-      // about what was called.
+      // never called. A missing result is a gap; an orphan result is a claim
+      // about a trade nobody was told to take.
       return false;
     }
   }
@@ -258,9 +281,11 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
   async function tradeResult({
     symbol, name, direction, stage, entryTime, result, entryPrice, exitPrice,
   }) {
-    // A result only for a trade whose opening went out. Otherwise a filtered
-    // channel would show losses it never predicted and wins it never called.
-    if (!(await wasAnnounced(symbol, entryTime, stage))) return false;
+    if (!(await isEnabled())) return false;
+    if (publishMode === 'signals') return false;
+    // Only for a trade that cleared the bar when it opened. Otherwise a
+    // filtered channel would report trades it never called.
+    if (!(await wasEligible(symbol, entryTime, stage))) return false;
 
     const key = `result:${symbol}:${entryTime}:${stage}`;
     const dp = entryPrice >= 50 ? 3 : 5;
