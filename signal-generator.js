@@ -128,6 +128,7 @@ try {
 
 const push = require('./push.js');
 const { createAlerts } = require('./push-alerts.js');
+const { createTelegram } = require('./telegram.js');
 
 /**
  * A pair's display name, for a notification the user reads at a glance.
@@ -159,6 +160,16 @@ function displayName(symbol) {
  * The claim is durable so a redeploy in the middle of an opportunity does not
  * announce it twice — see `push_alerts` and the note in that module.
  */
+/**
+ * Telegram, as a layer on top — never a gate in front.
+ *
+ * Nothing below awaits it and nothing below branches on it. The switch being
+ * off, the token being wrong, the API being down: the strategy still runs, the
+ * trades still settle, and the rows are still written. That separation is the
+ * whole design, and it is why every call is `void`-ed.
+ */
+const telegram = createTelegram({ db, log, err });
+
 const alerts = createAlerts({
   async claim(symbol, setupKey, stage) {
     if (!db) return true; // no database: memory is the only guard, and it is on
@@ -404,6 +415,47 @@ function tick() {
       } catch (e) {
         err(`${symbol} ${plan}:`, e.message);
         continue;
+      }
+
+      // ── Telegram ──────────────────────────────────────────────────────
+      //
+      // Guarded by the same plan check as the push notifications below, for
+      // the same reason: both plans run the same program, so one event reaches
+      // here twice. Not awaited — a settlement must never wait on a message.
+      if (plan === PLANS[0].plan) {
+        if (event.signal !== null) {
+          void telegram.signalOpened({
+            symbol,
+            name: displayName(symbol),
+            direction: event.signal.direction,
+            stage: event.signal.stage,
+            entryTime: event.signal.entryTime,
+            // The level the trade came from, where there is one. A martingale
+            // has no level of its own — it follows the trade before it.
+            level: armedBefore ? armedBefore.level : null,
+            durationMinutes: PROGRAM.durationMinutes,
+            // ‹A11›'s own measurement, carried on the signal, so the publishing
+            // bar ranks by the strategy's number instead of a second one.
+            depthBps: event.signal.depthBps,
+          });
+        }
+
+        if (event.settled !== null) {
+          // Keyed by the candle this trade RAN on, which is the one that just
+          // closed — so the result attaches to its own trade even when several
+          // settle in the same second.
+          const settledBar = lastClosed(candles);
+          void telegram.tradeResult({
+            symbol,
+            name: displayName(symbol),
+            direction: event.settled.direction,
+            stage: event.settled.stage,
+            entryTime: settledBar ? settledBar.time : Date.now(),
+            result: event.settled.result,
+            entryPrice: event.settled.entryPrice,
+            exitPrice: event.settled.exitPrice,
+          });
+        }
       }
 
       // Notifications, once per symbol rather than once per plan. Both plans
@@ -749,6 +801,11 @@ async function start() {
   setInterval(() => { void flush().then(() => settlePending()); }, FLUSH_MS);
   setInterval(() => { void rollup(); }, ROLLUP_MS);
   setInterval(() => { void prune(); }, PRUNE_MS);
+
+  // The daily summary watches for the UTC day to roll over. It lives in this
+  // process because this process is the one that never stops — a scheduler on
+  // a laptop is a scheduler that runs when the laptop is open.
+  telegram.startScheduler();
   setInterval(report, 3600_000);
 
   // The rollup runs once shortly after boot so the admin page is never looking

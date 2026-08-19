@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 7c2218ce06e78e2953aff150fe3433ea22099c6240c91c1214489beba3aa34d3
+// engine-source-sha256: 6cc6fba4f9088ea19633c90ae06ca5371d9fafc51285ac58f0ddbb4ea6911585
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -1405,7 +1405,8 @@ var fib236Touch = {
     state.armed = null;
     const heldToClose = armed.direction === "CALL" ? candle.close <= armed.level : candle.close >= armed.level;
     if (!heldToClose) return { ...NO_EVENT, diagnostics };
-    if (depthBps(armed.direction, armed.level, candle.close) < MIN_DEPTH_BPS - DEPTH_SLACK_BPS) {
+    const depth = depthBps(armed.direction, armed.level, candle.close);
+    if (depth < MIN_DEPTH_BPS - DEPTH_SLACK_BPS) {
       return { ...NO_EVENT, diagnostics };
     }
     state.cycle = {
@@ -1415,7 +1416,13 @@ var fib236Touch = {
     };
     return {
       settled: null,
-      signal: { direction: armed.direction, stage: "primary", entryTime: nextCandleTime },
+      signal: {
+        direction: armed.direction,
+        stage: "primary",
+        entryTime: nextCandleTime,
+        // Reported, not decided on. ‹A11› has already passed by this line.
+        depthBps: depth
+      },
       cycleEnd: null,
       diagnostics
     };
@@ -1628,5 +1635,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "7c2218ce06e78e2953aff150fe3433ea22099c6240c91c1214489beba3aa34d3";
+module.exports.BUNDLE_SOURCE_HASH = "6cc6fba4f9088ea19633c90ae06ca5371d9fafc51285ac58f0ddbb4ea6911585";
 
