@@ -95,6 +95,7 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
 
   let enabled = false;
   let minDepthBps = 0;
+  let dailyOn = true;
   let checkedAt = 0;
 
   /**
@@ -121,6 +122,9 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
       enabled = data?.data?.enabled === true;
       const raw = Number(data?.data?.minDepthBps);
       minDepthBps = Number.isFinite(raw) && raw > 0 ? raw : 0;
+      // Absent means on: the summary predates this switch, and a missing field
+      // should not silently stop something that was already running.
+      dailyOn = data?.data?.daily !== false;
     } catch (e) {
       err('telegram config:', e.message);
     }
@@ -281,6 +285,7 @@ function createTelegram({ db, log, err, now = () => Date.now() }) {
     const key = `daily:${day}`;
     try {
       if (!(await isEnabled())) return false;
+      if (!dailyOn) return false;
       if (!db) return false;
 
       const from = `${day}T00:00:00Z`;

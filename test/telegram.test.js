@@ -19,6 +19,7 @@ const { createTelegram } = require('../telegram.js');
  */
 function fakeDb({
   enabled = true, claimed = new Set(), signals = [], failClaim = false, minDepthBps = 0,
+  daily = true,
 } = {}) {
   return {
     claimed,
@@ -27,7 +28,10 @@ function fakeDb({
         return {
           select: () => ({
             eq: () => ({
-              maybeSingle: async () => ({ data: { data: { enabled, minDepthBps } }, error: null }),
+              maybeSingle: async () => ({
+                data: { data: { enabled, minDepthBps, daily } },
+                error: null,
+              }),
             }),
           }),
         };
@@ -468,6 +472,49 @@ test.describe('the publishing bar', () => {
       // No level of its own, so no depth — and it belongs with the trade above.
       await tg.signalOpened({ ...TRADE, stage: 'martingale', depthBps: undefined });
       assert.equal(net.calls.length, 2);
+    } finally {
+      net.restore();
+    }
+  });
+});
+
+
+test.describe('the daily summary switch', () => {
+  const rows = [{ symbol: 'A', bar_time: '2026-08-19T10:00:00Z', outcome: 'win' }];
+
+  test.it('sends nothing when the summary is switched off', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({ db: fakeDb({ signals: rows, daily: false }), log() {}, err() {} });
+      assert.equal(await tg.dailySummary('2026-08-19'), false);
+      assert.equal(net.calls.length, 0);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('leaves signals and results alone when only the summary is off', async () => {
+    const net = stubHttps();
+    try {
+      const db = fakeDb({ daily: false });
+      const tg = createTelegram({ db, log() {}, err() {} });
+      await tg.signalOpened(TRADE);
+      await tg.tradeResult({ ...TRADE, result: 'WIN', entryPrice: 1.1, exitPrice: 1.2 });
+      assert.equal(net.calls.length, 2);
+    } finally {
+      net.restore();
+    }
+  });
+
+  test.it('treats a missing field as on', async () => {
+    const net = stubHttps();
+    try {
+      const tg = createTelegram({
+        db: fakeDb({ signals: rows, daily: undefined }),
+        log() {},
+        err() {},
+      });
+      assert.equal(await tg.dailySummary('2026-08-19'), true);
     } finally {
       net.restore();
     }
