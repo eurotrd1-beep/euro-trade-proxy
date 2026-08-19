@@ -1,6 +1,6 @@
 // GENERATED — do not edit. Built from euro_trade_ts/packages/engine by
 // scripts/build-engine-bundle.mjs. Edit the source there and rebuild.
-// engine-source-sha256: 7a84cc3c585084be07d2cc87eb1c1118734a34c31c503a28d542e1db839a5482
+// engine-source-sha256: 72c524ee9212d31de2fba946b2bcba734cca0826c83cf9f79e745155288c5233
 
 "use strict";
 var __defProp = Object.defineProperty;
@@ -1202,6 +1202,7 @@ function guaranteedWinExit(direction, entryPrice, livePrice, rng = Math.random) 
 var NO_EVENT = { settled: null, signal: null, cycleEnd: null };
 
 // packages/engine/src/programs/fib236.ts
+var CLOSENESS_CURVE = 5;
 var FIB = 0.236;
 var FIRED_MEMORY = 32;
 function blankDiagnostics() {
@@ -1414,7 +1415,26 @@ function setupCompletion(armed, price) {
 var BAND = {
   pivots: 15,
   rejected: 30,
-  armed: 50,
+  /**
+   * An adopted setup starts here, and the jump from 50 is deliberate.
+   *
+   * Four conditions have to pass before a setup is adopted, and once it is, the
+   * strategy is committed to it: no more searching, one thing left to wait for.
+   * The gap below this band is not wasted scale — it is the distance between
+   * "something might form here" and "this is the one".
+   */
+  armed: 90,
+  /**
+   * The ceilings of the two searching bands.
+   *
+   * Written down rather than taken from the band above, which is what they used
+   * to do — and when the armed band moved from 50 up to 90, both of these
+   * silently moved with it. A pair that had found a leg and refused it started
+   * reading 90: the same number as an adopted setup, for the opposite outcome.
+   * The bands are neighbours, not a formula.
+   */
+  pivotsTop: 30,
+  rejectedTop: 50,
   /**
    * The top of the approach — everything below a touch.
    *
@@ -1424,7 +1444,7 @@ var BAND = {
    */
   armedTop: 99.9
 };
-function setupProgress(state, diagnostics, price, touchedThisCandle = false) {
+function setupProgress(state, diagnostics, price, candleLeft = 1, touchedThisCandle = false) {
   if (state.cycle !== null) return { stage: "fired", percent: 100 };
   if (state.armed !== null) {
     const gap = Math.abs(state.armed.level - price);
@@ -1437,10 +1457,14 @@ function setupProgress(state, diagnostics, price, touchedThisCandle = false) {
         gap: 0
       };
     }
-    const closeness = setupCompletion(state.armed, price);
+    const legSize = Math.abs(state.armed.level - state.armed.endPrice) / FIB;
+    const closeness = legSize > 0 ? Math.max(0, Math.min(1, 1 - gap / legSize)) : 0;
+    const need = Math.max(1 - closeness, 1e-9);
+    const reach = Math.min(1, Math.max(0, candleLeft) / need);
+    const curved = Math.pow(closeness, CLOSENESS_CURVE);
     return {
       stage: "armed",
-      percent: BAND.armed + closeness * (BAND.armedTop - BAND.armed),
+      percent: BAND.armed + curved * reach * (BAND.armedTop - BAND.armed),
       level: state.armed.level,
       direction: state.armed.direction,
       gap
@@ -1450,11 +1474,11 @@ function setupProgress(state, diagnostics, price, touchedThisCandle = false) {
   const refused = diagnostics.rejectedSwingTouched + diagnostics.rejectedBroken + diagnostics.rejectedAlreadyFired;
   if (refused > 0) {
     const share = Math.min(1, refused / 3);
-    return { stage: "rejected", percent: BAND.rejected + share * (BAND.armed - BAND.rejected) };
+    return { stage: "rejected", percent: BAND.rejected + share * (BAND.rejectedTop - BAND.rejected) };
   }
   if (diagnostics.pairsExamined > 0) {
     const share = Math.min(1, diagnostics.pairsExamined / 4);
-    return { stage: "pivots", percent: BAND.pivots + share * (BAND.rejected - BAND.pivots) };
+    return { stage: "pivots", percent: BAND.pivots + share * (BAND.pivotsTop - BAND.pivots) };
   }
   return { stage: "idle", percent: 0 };
 }
@@ -1561,5 +1585,5 @@ function programFor(id) {
   williamsR
 });
 
-module.exports.BUNDLE_SOURCE_HASH = "7a84cc3c585084be07d2cc87eb1c1118734a34c31c503a28d542e1db839a5482";
+module.exports.BUNDLE_SOURCE_HASH = "72c524ee9212d31de2fba946b2bcba734cca0826c83cf9f79e745155288c5233";
 

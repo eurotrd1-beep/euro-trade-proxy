@@ -139,18 +139,17 @@ const push = require('./push.js');
 const announced = new Map();
 
 /**
- * How far along a pair must be before it is worth a notification.
+ * ── ONLY TWO THINGS ARE WORTH A NOTIFICATION ───────────────────────────────
  *
- * The progress scale puts an adopted setup at 50: the leg is confirmed and the
- * level is drawn, but price may be most of a leg away and may never come back.
- * Announcing there means announcing a possibility, and enough of those arrive
- * that the ones worth reading stop being read.
+ * A touch, which means the trade opens on the next candle, and the trade
+ * actually opening. Nothing else.
  *
- * 85 is inside the armed band and near the top of it, so it means "price is
- * closing on the level", not "a level exists". The trade opening has its own
- * message, one candle ahead of the entry.
+ * There used to be a third: a pair crossing 85% of the way to its level, sent
+ * as "most conditions met, get ready". It was true and it was useless — a
+ * possibility, arriving often, in the same shade as the two messages that mean
+ * something. A phone that buzzes for possibilities teaches its owner to ignore
+ * it, and then the certainty arrives in a queue with the maybes.
  */
-const NEAR_THRESHOLD = 85;
 
 /**
  * A pair's display name, for a notification the user reads at a glance.
@@ -427,22 +426,28 @@ function tick() {
           // Keyed by the setup, so one opportunity is announced once however
           // long it hovers at the threshold — and a NEW setup on the same pair
           // later is a new opportunity and is announced again.
-          // A touch is the last condition and it cannot be undone: the candle
-          // records it in its high or low, so the trade is owed from the moment
-          // price reaches the level whatever it does afterwards. That is a
-          // promise worth making. Short of it, the honest word is "nearly".
+          // ── A touch, tested the way the strategy tests it ─────────────────
+          //
+          // Containment, not "price is past the level". `touches` asks whether
+          // the level lies INSIDE the candle's high and low; a close on the far
+          // side of it satisfies neither that nor anything else. Measured on
+          // recorded candles, the one-sided version was right 6% of the time.
+          //
+          // And broken first, in the strategy's own order: a candle that ran
+          // through the leg's end retires the setup before the touch is ever
+          // considered, so a level inside THAT candle produces no trade.
+          const broken =
+            last && (armed.direction === 'CALL' ? last.h > armed.endPrice : last.l < armed.endPrice);
           const touched =
-            last && (armed.direction === 'CALL' ? last.c <= armed.level : last.c >= armed.level);
+            last && !broken && last.l <= armed.level && armed.level <= last.h;
 
-          if ((touched || pct >= NEAR_THRESHOLD) && announced.get(symbol) !== key) {
+          if (touched && announced.get(symbol) !== key) {
             announced.set(symbol, key);
             announce(
               symbol,
               'armed',
               'custom',
-              touched
-                ? `${armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · لمس ${armed.level.toFixed(5)} · الصفقة هتبدأ الشمعة الجاية`
-                : `${armed.direction === 'CALL' ? '🟢 صعود' : '🔴 هبوط'} · أغلب الشروط اتحققت (${pct.toFixed(0)}%) · جهّز نفسك`,
+              `${armed.direction === 'CALL' ? '🟢 شراء' : '🔴 بيع'} · لمس ${armed.level.toFixed(5)} · الصفقة هتبدأ الشمعة الجاية`,
             );
           }
         } else {
