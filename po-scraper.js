@@ -1161,14 +1161,161 @@ class PoWsClient {
     } catch (_) {}
   }
 
+  /**
+   * The open demo account — a session with no login at all.
+   *
+   * ── WHY THIS IS FIRST ──────────────────────────────────────────────────────
+   *
+   * The account login cannot be automated any more. Pocket Option now sends a
+   * PIN to the account's email on sign-in, and nothing running here can read
+   * that mailbox — which is what `login_failed` and `status=401` have been
+   * saying for eleven days, while the 2captcha balance sat there unused,
+   * because the captcha was never the thing that was failing.
+   *
+   * The demo page asks for no email, no password, no captcha and no PIN. So it
+   * is tried BEFORE the credential path rather than as a fallback: on this
+   * account the credential path cannot succeed, and trying it first only spends
+   * a browser launch to fail.
+   *
+   * ── WHAT IS DIFFERENT ABOUT IT ─────────────────────────────────────────────
+   *
+   * It streams from its own host — `try-demo-eu.po.market`, not
+   * `api-eu.po.market` — so the frame sniffer has to accept both or it will sit
+   * through a working session and report that it found nothing.
+   *
+   * A raw socket to that host is answered with `41` (disconnect) whether the
+   * auth frame carries an empty session or is never sent at all, so the page
+   * does mint something. This runs their page to get it, exactly as the login
+   * strike runs theirs.
+   *
+   * Everything it learns is written to `otc_status` as it goes. The site is not
+   * reachable from the machines this was developed on — the whole
+   * `pocketoption.com` domain times out from there while `po.market` answers in
+   * half a second — so the run itself is the only place the three open
+   * questions (is a session minted, are our twenty pairs there, is it the same
+   * market) can be answered, and it has to say so out loud.
+   */
+  async _captureDemo() {
+    const DEMO_URL = process.env.PO_DEMO_URL || 'https://m.pocketoption.com/en/cabinet/try-demo/';
+    let browser = null;
+    try {
+      browser = await this._launchBrowser();
+      if (!browser) return false;
+      const page = (await browser.pages())[0] || await browser.newPage();
+      try { await page.setUserAgent(this._ua().replace(/Headless/gi, '')); } catch (_) {}
+      try {
+        await page.setRequestInterception(true);
+        page.on('request', r => {
+          const t = r.resourceType();
+          if (t === 'image' || t === 'media' || t === 'font') r.abort(); else r.continue();
+        });
+      } catch (_) {}
+
+      const cdp = await page.target().createCDPSession();
+      await cdp.send('Network.enable');
+
+      let authFrame = null, wsUrl = null;
+      const urlById = {};
+      const assets = new Set();
+      const prices = {};
+      // BOTH hosts. The demo streams from try-demo-*; accepting only api-*
+      // would watch a working session and report nothing found.
+      const isFeed = u => /(?:api|try-demo)-[a-z0-9-]*\.po\.market/i.test(u || '');
+
+      cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
+        urlById[requestId] = url;
+        if (isFeed(url) && !wsUrl) wsUrl = url;
+      });
+      cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
+        const d = (response && response.payloadData) || '';
+        if (/"auth"/.test(d) && isFeed(urlById[requestId] || '')) {
+          authFrame = d;
+          wsUrl = urlById[requestId] || wsUrl;
+        }
+      });
+      cdp.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
+        if (!isFeed(urlById[requestId] || '')) return;
+        let t = (response && response.payloadData) || '';
+        if (response && response.opcode === 2) {
+          try { t = Buffer.from(t, 'base64').toString('utf8'); } catch (_) {}
+        }
+        t = String(t);
+        if (/updateAssets/i.test(t)) {
+          for (const m of t.matchAll(/\[\s*\d+\s*,\s*"([A-Za-z0-9_#-]{3,20})"/g)) assets.add(m[1]);
+        }
+        for (const m of t.matchAll(
+          /\[\s*"([A-Za-z0-9_#-]{3,20})"\s*,\s*\d{9,}(?:\.\d+)?\s*,\s*(\d+(?:\.\d+)?)\s*\]/g,
+        )) { assets.add(m[1]); prices[m[1]] = Number(m[2]); }
+      });
+
+      await this._reportRepair('demo:opening');
+      await page.goto(DEMO_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+      await this._reportRepair('demo:loaded url=' +
+        (() => { try { return (page.url() || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 30); } catch (_) { return '?'; } })());
+
+      // Up to 60 s for their app to boot, open the socket and authenticate.
+      const t0 = Date.now();
+      while (Date.now() - t0 < 60_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+
+      const present = this.enabled.size
+        ? [...this.enabled].filter(s => assets.has(s))
+        : [...assets];
+      const missing = this.enabled.size
+        ? [...this.enabled].filter(s => !assets.has(s))
+        : [];
+
+      // The three answers, where the admin can read them without a shell.
+      await this._reportRepair(
+        'demo:result auth=' + (authFrame ? 'YES' : 'no') +
+        ' assets=' + assets.size +
+        ' ours=' + present.length + '/' + (this.enabled.size || '?') +
+        ' prices=' + Object.keys(prices).length +
+        (missing.length ? ' missing=' + missing.slice(0, 6).join(',') : ''));
+
+      try { await browser.close(); } catch (_) {} browser = null;
+
+      if (!authFrame) {
+        // No frame means no replayable session: either the page never reached
+        // the socket, or it authorises some way this cannot carry. Either way
+        // the answer is no, and saying which is worth more than a retry.
+        await this._reportRepair('demo:no-auth-frame (page may be blocked from this host)');
+        return false;
+      }
+
+      activeAuth = authFrame.replace(/^4\d+(-)?/, '');
+      if (wsUrl) activeWsUrl = wsUrl;
+      await saveToken(activeAuth, activeWsUrl);
+      await this._reportRepair('demo:auth-captured-ok ✅ host=' +
+        (wsUrl || '').replace(/^wss?:\/\//, '').split('/')[0]);
+      log('recaptured a fresh token ✅ (demo account)');
+      return true;
+    } catch (e) {
+      await this._reportRepair('demo:error ' + (e.message || '').slice(0, 80));
+      warn('demo capture error:', e.message);
+      return false;
+    } finally {
+      if (browser) { try { await browser.close(); } catch (_) {} }
+    }
+  }
+
   // Temporary, login-only browser "strike": open → log in (a REAL browser runs
   // PO's JS + reCAPTCHA and has a genuine TLS fingerprint, so it passes the
   // anti-bot that blocks raw HTTP) → grab the server-IP session (WS auth frame
   // AND/OR the ci_session cookie) → close immediately. Stealth-hardened + heavy
   // resources blocked + single-process to fit Render's 512 MB for a short strike.
-  async recaptureToken() {
-    if (!PO_EMAIL || !PO_PASSWORD) { warn('auto-recapture needs PO_EMAIL/PO_PASSWORD'); return false; }
-    let puppeteer, chromium, browser = null;
+  /**
+   * The hardened Chromium launch, shared by both capture paths.
+   *
+   * Lifted out of `recaptureToken` when the demo capture was added rather than
+   * copied: the stealth plugin, the single-process flags that fit Render's
+   * 512 MB, and the persistent profile are all things that would drift apart in
+   * two copies, and the one that drifted would be the one that stopped working.
+   *
+   * Returns null when the dependencies or the binary are missing, having
+   * already said which in `otc_status`.
+   */
+  async _launchBrowser() {
+    let puppeteer, chromium;
     try {
       chromium = require('@sparticuz/chromium');
       const core = require('puppeteer-core');
@@ -1179,35 +1326,49 @@ class PoWsClient {
         await this._reportRepair('stealth-enabled');
       } catch (e) { puppeteer = core; await this._reportRepair('stealth-missing (plain):' + (e.message || '').slice(0, 40)); }
       try { chromium.setGraphicsMode = false; } catch (_) {}
-    } catch (e) { await this._reportRepair('deps-missing:' + (e.message || '').slice(0, 60)); return false; }
-    try {
-      await this._reportRepair('launching-chromium');
-      const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
-      // Sticky session: persist the Chrome profile (PO cookies) on the Render
-      // Persistent Disk so the login survives restarts → far fewer relogins and
-      // 2captcha solves. Falls back to an ephemeral profile if the disk is absent.
-      const fs2 = require('fs'), path2 = require('path');
-      let profileDir = process.env.PO_PROFILE_DIR || '/data/po-profile';
-      let useProfile = true;
-      try { fs2.mkdirSync(profileDir, { recursive: true }); }
-      catch (_) { useProfile = false; }
-      if (useProfile) {
-        // Drop a stale singleton lock left by a previous crashed run so launch never hangs.
-        for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-          try { fs2.rmSync(path2.join(profileDir, f), { force: true }); } catch (_) {}
-        }
-        await this._reportRepair('profile-dir=' + profileDir);
+    } catch (e) { await this._reportRepair('deps-missing:' + (e.message || '').slice(0, 60)); return null; }
+
+    await this._reportRepair('launching-chromium');
+    const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || await chromium.executablePath();
+    // Sticky session: persist the Chrome profile (PO cookies) on the Render
+    // Persistent Disk so the login survives restarts → far fewer relogins and
+    // 2captcha solves. Falls back to an ephemeral profile if the disk is absent.
+    const fs2 = require('fs'), path2 = require('path');
+    let profileDir = process.env.PO_PROFILE_DIR || '/data/po-profile';
+    let useProfile = true;
+    try { fs2.mkdirSync(profileDir, { recursive: true }); }
+    catch (_) { useProfile = false; }
+    if (useProfile) {
+      // Drop a stale singleton lock left by a previous crashed run so launch never hangs.
+      for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        try { fs2.rmSync(path2.join(profileDir, f), { force: true }); } catch (_) {}
       }
-      browser = await puppeteer.launch({
-        headless: chromium.headless ?? true,
-        executablePath: execPath || undefined,
-        userDataDir: useProfile ? profileDir : undefined,
-        args: [...(chromium.args || []), '--no-sandbox', '--disable-setuid-sandbox',
-               '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions',
-               '--disable-background-networking', '--mute-audio',
-               '--single-process', '--no-zygote'],   // ← minimise RAM on 512 MB
-        defaultViewport: { width: 1280, height: 800 },
-      });
+      await this._reportRepair('profile-dir=' + profileDir);
+    }
+    return puppeteer.launch({
+      headless: chromium.headless ?? true,
+      executablePath: execPath || undefined,
+      userDataDir: useProfile ? profileDir : undefined,
+      args: [...(chromium.args || []), '--no-sandbox', '--disable-setuid-sandbox',
+             '--disable-dev-shm-usage', '--disable-gpu', '--disable-extensions',
+             '--disable-background-networking', '--mute-audio',
+             '--single-process', '--no-zygote'],   // ← minimise RAM on 512 MB
+      defaultViewport: { width: 1280, height: 800 },
+    });
+  }
+
+  async recaptureToken() {
+    // The demo first. It needs no email, no password, no captcha and no emailed
+    // PIN — and the PIN is precisely why the credential path below can no
+    // longer finish on this account.
+    if (process.env.PO_DEMO !== '0') {
+      if (await this._captureDemo()) return true;
+    }
+    if (!PO_EMAIL || !PO_PASSWORD) { warn('auto-recapture needs PO_EMAIL/PO_PASSWORD'); return false; }
+    let browser = null;
+    try {
+      browser = await this._launchBrowser();
+      if (!browser) return false;
       const page = (await browser.pages())[0] || await browser.newPage();
       try { await page.setUserAgent(this._ua().replace(/Headless/gi, '')); } catch (_) {}
       // Block only the heaviest resources — KEEP scripts + css so PO's JS and the
