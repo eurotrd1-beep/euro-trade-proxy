@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'demo-session-2';
+const BUILD = 'demo-session-3';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -1897,16 +1897,39 @@ async function loadEnabledSymbols() {
 
 // Persist / restore the auto-recaptured token so a restart reuses the freshest
 // one instead of falling back to the (possibly stale) env value.
+//
+// ── UNLESS THE ENVIRONMENT IS HOLDING A NEWER ONE ──────────────────────────
+//
+// This used to overwrite `activeAuth` unconditionally, and that quietly undid
+// the one repair an operator can still perform by hand. Setting PO_AUTH on
+// Render restarts the service; the service then read a token captured three
+// weeks earlier out of `configs.otc_token` and used that instead — so a
+// freshly captured session appeared to change nothing at all, and the symptom
+// was identical to the capture having failed.
+//
+// The rule is the timestamps rather than a preference. A saved token captured
+// BEFORE this process started is older than whatever the environment was
+// given, because changing an environment variable is what restarted the
+// process. One captured after boot came from this run's own recapture and is
+// genuinely the freshest thing there is, so it still wins.
 async function loadToken() {
   if (!db) return;
   try {
     const { data } = await db.from('configs').select('data').eq('id', 'otc_token').maybeSingle();
     const t = data && data.data;
-    if (t && t.auth) {
-      activeAuth = t.auth;
-      if (t.wsUrl) activeWsUrl = t.wsUrl;
-      log('restored saved session token (captured ' + (t.capturedAt || '?') + ')');
+    if (!t || !t.auth) return;
+
+    const savedAt = Date.parse(t.capturedAt || '') || 0;
+    const bootedAt = Date.now() - process.uptime() * 1000;
+    if (PO_AUTH && savedAt < bootedAt) {
+      log('ignoring saved token from ' + (t.capturedAt || '?') +
+          ' — PO_AUTH in the environment is newer');
+      return;
     }
+
+    activeAuth = t.auth;
+    if (t.wsUrl) activeWsUrl = t.wsUrl;
+    log('restored saved session token (captured ' + (t.capturedAt || '?') + ')');
   } catch (_) {}
 }
 async function saveToken(auth, wsUrl) {
