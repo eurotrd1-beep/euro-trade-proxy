@@ -74,7 +74,7 @@ const https = require('https');
 function nextBeatMs() { return 12000 + Math.floor(Math.random() * 6000); }
 
 // Bump on each deploy so we can confirm from the DB which build Render is running.
-const BUILD = 'demo-session-1';
+const BUILD = 'demo-session-2';
 
 // ── Minimal HTTP helpers (for raw server-side login → server-IP token) ────────
 function httpReq(method, url, { headers = {}, body = null } = {}) {
@@ -1248,14 +1248,49 @@ class PoWsClient {
         )) { assets.add(m[1]); prices[m[1]] = Number(m[2]); }
       });
 
-      await this._reportRepair('demo:opening');
-      await page.goto(DEMO_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
-      await this._reportRepair('demo:loaded url=' +
-        (() => { try { return (page.url() || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 30); } catch (_) { return '?'; } })());
+      // Every socket, not just the feed's. "No feed socket" and "no socket at
+      // all" are different failures — the first means we are watching the wrong
+      // host, the second means the page never got far enough to open one — and
+      // the run that reported `auth=no assets=0` could not tell them apart.
+      let anySockets = 0;
+      cdp.on('Network.webSocketCreated', () => { anySockets++; });
 
-      // Up to 60 s for their app to boot, open the socket and authenticate.
+      await this._reportRepair('demo:opening');
+      const nav = await page.goto(DEMO_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+        .then(r => (r ? 'http' + r.status() : 'no-response')).catch(e => 'nav-error:' + (e.message || '').slice(0, 40));
+
+      // The FULL url. Stripping the origin hid the one thing worth knowing: a
+      // mobile path that bounced to the desktop site, or to a login, reads
+      // exactly like the page we asked for once the host is cut off.
+      const where = (() => { try { return (page.url() || '').slice(0, 80); } catch (_) { return '?'; } })();
+      const shape = await page.evaluate(() => ({
+        title: (document.title || '').slice(0, 40),
+        text: (document.body ? document.body.innerText.length : 0),
+        // Anything that looks like the button a person would press.
+        starts: [...document.querySelectorAll('a,button')]
+          .filter(e => /demo|start|try|trade/i.test(e.textContent || ''))
+          .slice(0, 3).map(e => (e.textContent || '').trim().slice(0, 20)),
+      })).catch(() => ({ title: '?', text: -1, starts: [] }));
+      await this._reportRepair('demo:loaded ' + nav + ' at=' + where +
+        ' title="' + shape.title + '" text=' + shape.text +
+        (shape.starts.length ? ' buttons=' + shape.starts.join('|') : ''));
+
+      // A person lands here and presses something. Try that before concluding
+      // the page is a dead end — it costs one click and answers the question.
+      if (shape.starts.length) {
+        await page.evaluate(() => {
+          const el = [...document.querySelectorAll('a,button')]
+            .find(e => /demo|start|try|trade/i.test(e.textContent || ''));
+          if (el) el.click();
+        }).catch(() => {});
+        await this._reportRepair('demo:clicked');
+      }
+
+      // Ninety seconds, not sixty. Their app boots inside a single-process
+      // Chrome on a 512 MB box; a socket that has not appeared in a minute has
+      // not necessarily failed, it may still be parsing their bundle.
       const t0 = Date.now();
-      while (Date.now() - t0 < 60_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
+      while (Date.now() - t0 < 90_000 && !authFrame) await new Promise(r => setTimeout(r, 500));
 
       const present = this.enabled.size
         ? [...this.enabled].filter(s => assets.has(s))
@@ -1270,15 +1305,19 @@ class PoWsClient {
         ' assets=' + assets.size +
         ' ours=' + present.length + '/' + (this.enabled.size || '?') +
         ' prices=' + Object.keys(prices).length +
+        ' sockets=' + anySockets +
         (missing.length ? ' missing=' + missing.slice(0, 6).join(',') : ''));
 
       try { await browser.close(); } catch (_) {} browser = null;
 
       if (!authFrame) {
-        // No frame means no replayable session: either the page never reached
-        // the socket, or it authorises some way this cannot carry. Either way
-        // the answer is no, and saying which is worth more than a retry.
-        await this._reportRepair('demo:no-auth-frame (page may be blocked from this host)');
+        // `sockets` separates the two failures. None at all means the page never
+        // reached its own feed — blocked, or still booting, or not the page we
+        // think it is. Some, but no auth frame, means it talks to a host this
+        // does not recognise, and the fix is the pattern rather than the plan.
+        await this._reportRepair('demo:no-auth-frame sockets=' + anySockets +
+          (anySockets ? ' (opened sockets but none matched api-*/try-demo-*)'
+                      : ' (no socket at all — page never reached its feed)'));
         return false;
       }
 
@@ -1361,7 +1400,18 @@ class PoWsClient {
     // The demo first. It needs no email, no password, no captcha and no emailed
     // PIN — and the PIN is precisely why the credential path below can no
     // longer finish on this account.
-    if (process.env.PO_DEMO !== '0') {
+    //
+    // Throttled to once every ten minutes, and that is not tidiness. The repair
+    // loop retries about every forty seconds; trying the demo on each one turns
+    // a single Chromium launch into two, on a 512 MB instance that the launch
+    // flags are already fighting to fit one into. A path that just failed will
+    // not succeed forty seconds later, and thrashing the box makes the fallback
+    // fail too — so the demo gets one attempt per ten minutes and the login
+    // keeps the cadence it was tuned for.
+    const DEMO_EVERY_MS = 10 * 60 * 1000;
+    if (process.env.PO_DEMO !== '0' &&
+        Date.now() - (this._demoTriedAt || 0) > DEMO_EVERY_MS) {
+      this._demoTriedAt = Date.now();
       if (await this._captureDemo()) return true;
     }
     if (!PO_EMAIL || !PO_PASSWORD) { warn('auto-recapture needs PO_EMAIL/PO_PASSWORD'); return false; }
