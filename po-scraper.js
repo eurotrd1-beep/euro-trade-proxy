@@ -175,7 +175,14 @@ const log  = (...a) => console.log('[OTC]', ...a);
 const warn = (...a) => console.warn('[OTC]', ...a);
 const err  = (...a) => console.error('[OTC]', ...a);
 
-// ── Supabase ─────────────────────────────────────────────────────────────────
+// ── The database ─────────────────────────────────────────────────────────────
+//
+// `withHub` is required HERE, above the block that uses it, and not down with
+// the other requires. `const` is hoisted into a temporal dead zone, so a
+// declaration placed after its use throws "Cannot access before initialization"
+// — which is exactly how the signal generator was silently dead for two hours.
+const { withHub } = require('./hub-client.js');
+
 let db = null;
 if (createClient && SUPABASE_URL && SUPABASE_KEY) {
   db = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
@@ -183,6 +190,10 @@ if (createClient && SUPABASE_URL && SUPABASE_KEY) {
 } else {
   warn('Supabase not configured — OTC scraper will run without persistence');
 }
+
+// Tables named in DATA_HUB_TABLES go to D1 through the hub; everything else
+// stays on the client above. Unset, this returns that client unchanged.
+db = withHub(db);
 
 // ════════════════════════════════════════════════════════════════════════════
 //  Asset policy — what this system is allowed to see

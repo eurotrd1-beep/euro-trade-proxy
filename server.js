@@ -4,9 +4,12 @@ const http  = require('http');
 const https = require('https');
 const { WebSocket, WebSocketServer } = require('ws');
 const zlib = require('zlib');
+const { createHubFeed } = require('./price-hub-feed.js');
 const push = require('./push.js');
 
-// ── Supabase (candles + pairs + OTC status) ───────────────────────────────────
+// ── The database (candles + pairs + OTC status) ───────────────────────────────
+const { withHub } = require('./hub-client.js');
+
 let db = null;
 try {
   const { createClient } = require('@supabase/supabase-js');
@@ -21,6 +24,11 @@ try {
 } catch (e) {
   console.error('[Supabase] init failed:', e.message);
 }
+
+// Tables named in DATA_HUB_TABLES go to D1 through the hub. `push.js` and
+// `telegram.js` are handed this same object, so wrapping the two creation
+// sites covers every call site in the process.
+db = withHub(db);
 
 
 // ── Browser WebSocket clients (OTC live price feed) ───────────────────────────
@@ -74,11 +82,35 @@ function bareSymbol(sym) {
   return String(sym).replace(/^[A-Z]+:/, '').replace(/_/g, '').toUpperCase();
 }
 
+/**
+ * The Cloudflare price hub, when it is configured.
+ *
+ * Opt-in on purpose: with neither variable set this is null and everything
+ * below behaves exactly as it always has. The hub does not REPLACE Render's own
+ * fan-out, it runs beside it — which is what makes the way back a config change
+ * on the app rather than a deploy here.
+ */
+const hubFeed = (process.env.PRICE_HUB_URL && process.env.PRICE_HUB_SECRET)
+  ? createHubFeed({
+      url: process.env.PRICE_HUB_URL,
+      secret: process.env.PRICE_HUB_SECRET,
+      log: (...a) => console.log('[HUB]', ...a),
+      err: (...a) => console.warn('[HUB]', ...a),
+    })
+  : null;
+global.hubFeed = hubFeed;
+
 // Push OTC prices to browser WS clients. The chart subscribes with the BARE
 // symbol while the scraper may broadcast a suffixed one — match on the bare
 // form so the live price actually reaches the client (otherwise it freezes).
 global.broadcastOtcPrice = function(otcSym, price) {
   global.otcLastTick = Date.now();   // freshness heartbeat (used by the watchdog)
+
+  // Offered before Render's own fan-out below. The batcher keeps one value per
+  // symbol, so repeats collapse there rather than travelling — eighty ticks a
+  // second become one message per symbol per batch.
+  if (hubFeed) hubFeed.offer(otcSym, price);
+
   const bare = bareSymbol(otcSym);
   for (const [ws, subs] of clientMap) {
     if (ws.readyState !== WebSocket.OPEN) continue;
@@ -292,7 +324,7 @@ const server = http.createServer(async (req, res) => {
   // ── GET /health ───────────────────────────────────────────────────────────
   if (url.pathname === '/health') {
     const otcSyms = (global.otcPrices && Object.keys(global.otcPrices).length) || 0;
-    json({ status: 'ok', connected: true, otcSymbols: otcSyms });
+    json({ status: 'ok', connected: true, otcSymbols: otcSyms, hub: hubFeed ? hubFeed.stats() : null });
     return;
   }
 
