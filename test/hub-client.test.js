@@ -379,3 +379,34 @@ test('every createClient in the proxy is handed to withHub', () => {
 
   assert.deepStrictEqual(offenders, [], offenders.join('\n'));
 });
+
+/**
+ * Every table this repository reads or writes must be routable.
+ *
+ * `push_alerts` was not, and the reason it was missed is worth keeping: the
+ * list used to be derived from the alias table, so a table only got routed if
+ * it happened to have a RENAMED column. `push_alerts` is spelled identically in
+ * both databases, so it needed no translation — and needing no translation is
+ * the weakest possible reason to keep writing the wrong database.
+ */
+test('every table the proxy touches is in KNOWN', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(__dirname, '..');
+
+  process.env.DATA_HUB_TABLES = 'all';
+  delete require.cache[require.resolve('../hub-client.js')];
+  const known = require('../hub-client.js')._internals.selected();
+  delete process.env.DATA_HUB_TABLES;
+
+  const used = new Set();
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
+    if (file === 'hub-client.js') continue;
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    for (const m of src.matchAll(/\.from\('([a-z_]+)'\)/g)) used.add(m[1]);
+  }
+
+  const missing = [...used].filter((t) => !known.has(t)).sort();
+  assert.deepStrictEqual(missing, [],
+    `these tables would still write Postgres: ${missing.join(', ')}`);
+});

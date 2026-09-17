@@ -368,8 +368,27 @@ class Table {
 
 // ── Choosing, per table ─────────────────────────────────────────────────────
 
-/** The tables this client knows how to translate. */
-const KNOWN = Object.keys(ALIASES).concat(['configs', 'clicks', 'pairs', 'users', 'brokers']);
+/**
+ * Every table this client may route.
+ *
+ * ── WHY IT IS WRITTEN OUT AND NOT DERIVED FROM `ALIASES` ───────────────────
+ *
+ * It was `Object.keys(ALIASES)` plus a short hand-written list, and that is a
+ * rule with a hole in it: a table only appears in ALIASES if it has a RENAMED
+ * column. `push_alerts` has none — its columns are spelled the same in both
+ * databases — so it was absent, fell through the router, and kept writing
+ * Postgres while every table around it moved. Nothing errored; there is no
+ * error for "wrote to the wrong database".
+ *
+ * Needing no translation is the weakest possible reason to exclude a table
+ * from routing, so the list is now the list, stated once, and the test beside
+ * it checks it against every `.from(...)` in this repository.
+ */
+const KNOWN = [
+  'candles', 'price_snapshot', 'otc_pairs', 'push_subscriptions', 'push_alerts',
+  'telegram_alerts', 'telegram_queue', 'captcha_stats', 'repair_log', 'configs',
+  'clicks', 'pairs', 'users', 'brokers', 'signals', 'signal_history',
+];
 
 function selected() {
   const raw = (process.env.DATA_HUB_TABLES || '').trim();
