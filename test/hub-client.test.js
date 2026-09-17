@@ -346,3 +346,36 @@ test('the wrapper keeps every method the Supabase client has', () => {
     if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
+
+/**
+ * Every Supabase client in this process has to be routed.
+ *
+ * Two of the three were wrapped and the third was not: `signal-generator.js`
+ * builds its own client and hands it to `telegram.js` and `push.js`, which
+ * write `telegram_alerts` and `push_subscriptions` on their own behalf. Those
+ * three tables kept going to Postgres while everything around them moved — the
+ * exact split the migration exists to prevent, where the admin changes a
+ * setting in one database and the code that obeys it reads the other.
+ *
+ * Counting `createClient` against `withHub` is crude and it is the check that
+ * would have caught it. A fourth client added later fails this immediately.
+ */
+test('every createClient in the proxy is handed to withHub', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(__dirname, '..');
+
+  const offenders = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
+    if (file === 'hub-client.js') continue;
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    // Ignore commented-out lines so prose about the client is not counted.
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    const creates = (code.match(/createClient\s*\(/g) || []).length;
+    if (creates === 0) continue;
+    const wraps = (code.match(/withHub\s*\(/g) || []).length;
+    if (wraps < 1) offenders.push(`${file}: creates a client and never calls withHub`);
+  }
+
+  assert.deepStrictEqual(offenders, [], offenders.join('\n'));
+});

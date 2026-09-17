@@ -137,6 +137,8 @@ let pipeline = null;
 
 // ── Supabase (service role — this process is the only writer) ───────────────
 
+const { withHub } = require('./hub-client.js');
+
 let db = null;
 try {
   const { createClient } = require('@supabase/supabase-js');
@@ -146,6 +148,25 @@ try {
 } catch (e) {
   err('supabase client unavailable:', e.message);
 }
+
+// ── Routed, like the other two ───────────────────────────────────────────────
+//
+// This was the THIRD client and the one that was missed. Wrapping the scraper
+// and the server covered everything they write themselves, but this object is
+// handed to two modules that write on their own behalf:
+//
+//   createTelegram({ db })  → telegram_alerts, and reads configs.telegram
+//   push.broadcast(db, …)   → push_subscriptions
+//
+// So those three tables kept going to Postgres while everything around them
+// moved, which is the exact split the migration exists to avoid: the admin
+// changes a Telegram setting in one database and the code that obeys it reads
+// the other, with nothing erroring on either side.
+//
+// The pipeline below is unaffected either way — it talks to the hub directly
+// through its own credentials and never used this client for the four
+// functions.
+db = withHub(db);
 
 if (db) {
   pipeline = createPipeline(db);
