@@ -126,6 +126,23 @@ try {
   err('supabase client unavailable:', e.message);
 }
 
+if (db) {
+  pipeline = createPipeline(db);
+  log(`خط الإشارات بيكتب على: ${pipeline.target}`);
+}
+
+/**
+ * Where the four pipeline calls go.
+ *
+ * Supabase unless DATA_HUB_URL and DATA_HUB_SERVICE_SECRET are both set, in
+ * which case D1 through the Worker. Rolling back is unsetting a variable and
+ * restarting — no deploy, no code change — which matters most on this path,
+ * because a bad afternoon here is a gap in the published record that cannot be
+ * filled in afterwards.
+ */
+const { createPipeline } = require('./pipeline-client.js');
+let pipeline = null;
+
 const push = require('./push.js');
 const { createAlerts } = require('./push-alerts.js');
 const { createTelegram } = require('./telegram.js');
@@ -575,7 +592,7 @@ async function flush() {
   buffer = [];
 
   try {
-    const { data, error } = await db.rpc('record_signals', { p_rows: batch });
+    const { data, error } = await pipeline.recordSignals(batch);
     if (error) throw new Error(error.message);
     const r = Array.isArray(data) ? data[0] : data;
     if (!r) return;
@@ -644,7 +661,7 @@ async function flush() {
 async function resolveNow(rows) {
   if (!db || rows.length === 0) return;
   try {
-    const { error } = await db.rpc('resolve_signals', { p_rows: rows });
+    const { error } = await pipeline.resolveSignals(rows);
     if (error) throw new Error(error.message);
     stats.resolved += rows.length;
   } catch (e) {
@@ -737,7 +754,7 @@ async function rollup() {
   const today = new Date().toISOString().slice(0, 10);
   const from = new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 10);
   try {
-    const { error } = await db.rpc('refresh_signal_daily', { p_from: from, p_to: today });
+    const { error } = await pipeline.refreshDaily(from, today);
     if (error) throw new Error(error.message);
   } catch (e) {
     err('rollup:', e.message);
@@ -747,7 +764,7 @@ async function rollup() {
 async function prune() {
   if (!db) return;
   try {
-    const { data, error } = await db.rpc('prune_signals', { p_keep_days: KEEP_DAYS });
+    const { data, error } = await pipeline.pruneSignals(KEEP_DAYS);
     if (error) throw new Error(error.message);
     if (data > 0) log(`اتمسح ${data} صف خام أقدم من ${KEEP_DAYS} يوم (التجميع محفوظ)`);
   } catch (e) {
