@@ -182,3 +182,53 @@ test('the secret is sent, and only to the hub', async () => {
   assert.equal(calls[0].init.headers['x-service-secret'], 'sekrit');
   assert.ok(calls[0].url.startsWith('https://hub.example/v1/pipeline/'));
 });
+
+/**
+ * The generator loads with a database configured.
+ *
+ * ── THE BUG THIS EXISTS FOR ────────────────────────────────────────────────
+ *
+ * `createPipeline` was required BELOW the block that calls it. `const` is
+ * hoisted into a temporal dead zone, so the call threw "Cannot access
+ * 'createPipeline' before initialization", start.js caught it as a failed
+ * load, and the generator never ran. The proxy stayed up, the scraper kept
+ * collecting candles, every endpoint answered 200 — and no signal was
+ * generated for two hours, with one line in the log to say so.
+ *
+ * The existing generator test requires the same module and passed throughout,
+ * because the block is guarded by `if (db)` and there are no Supabase
+ * credentials in the test environment. The broken path was unreachable from
+ * the test that was meant to cover it, which is worse than having no test:
+ * the suite was green about code it never executed.
+ *
+ * So this one sets credentials first.
+ */
+test('signal-generator loads when a database IS configured', () => {
+  const saved = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_SERVICE_KEY,
+    gen: process.env.SIGNAL_GENERATOR,
+  };
+  // A syntactically valid URL and key so createClient() succeeds and `db` is
+  // truthy — which is the only way to reach the block that was broken.
+  process.env.SUPABASE_URL = 'https://example.supabase.co';
+  process.env.SUPABASE_SERVICE_KEY = 'test-key-not-real';
+  // Stops start() from opening timers and sockets during the test.
+  process.env.SIGNAL_GENERATOR = '0';
+
+  delete require.cache[require.resolve('../signal-generator.js')];
+  try {
+    assert.doesNotThrow(
+      () => require('../signal-generator.js'),
+      /before initialization/,
+      'the generator must load with a database configured',
+    );
+  } finally {
+    delete require.cache[require.resolve('../signal-generator.js')];
+    for (const [k, v] of [['SUPABASE_URL', saved.url], ['SUPABASE_SERVICE_KEY', saved.key],
+                          ['SIGNAL_GENERATOR', saved.gen]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});

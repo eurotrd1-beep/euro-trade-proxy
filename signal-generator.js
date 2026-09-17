@@ -114,6 +114,27 @@ const ENABLED = process.env.SIGNAL_GENERATOR !== '0';
 const log = (...a) => console.log('[signals]', ...a);
 const err = (...a) => console.error('[signals]', ...a);
 
+/**
+ * Where the four pipeline calls go.
+ *
+ * Supabase unless DATA_HUB_URL and DATA_HUB_SERVICE_SECRET are both set, in
+ * which case D1 through the Worker. Rolling back is unsetting a variable and
+ * restarting — no deploy, no code change — which matters most on this path,
+ * because a bad afternoon here is a gap in the published record that cannot be
+ * filled in afterwards.
+ *
+ * ── DECLARED HERE, ABOVE THE BLOCK THAT USES IT ───────────────────────────
+ *
+ * It was originally placed lower down, next to the other requires, and that
+ * broke the whole generator: `const` is hoisted into a temporal dead zone, so
+ * the `if (db)` block below threw "Cannot access 'createPipeline' before
+ * initialization" and start.js caught it as a failed load. The proxy kept
+ * running, the scraper kept collecting candles, and no signal was generated
+ * for two hours with nothing in the log except the catch line.
+ */
+const { createPipeline } = require('./pipeline-client.js');
+let pipeline = null;
+
 // ── Supabase (service role — this process is the only writer) ───────────────
 
 let db = null;
@@ -130,18 +151,6 @@ if (db) {
   pipeline = createPipeline(db);
   log(`خط الإشارات بيكتب على: ${pipeline.target}`);
 }
-
-/**
- * Where the four pipeline calls go.
- *
- * Supabase unless DATA_HUB_URL and DATA_HUB_SERVICE_SECRET are both set, in
- * which case D1 through the Worker. Rolling back is unsetting a variable and
- * restarting — no deploy, no code change — which matters most on this path,
- * because a bad afternoon here is a gap in the published record that cannot be
- * filled in afterwards.
- */
-const { createPipeline } = require('./pipeline-client.js');
-let pipeline = null;
 
 const push = require('./push.js');
 const { createAlerts } = require('./push-alerts.js');
