@@ -395,12 +395,35 @@ function withHub(db) {
   const routed = [...tables].sort().join(', ');
   console.log(`[hub] tables on D1: ${routed}`);
 
-  return {
-    ...db,
-    from(table) {
-      return tables.has(table) ? new Table(table) : db.from(table);
+  // ── A Proxy, not a spread ────────────────────────────────────────────────
+  //
+  // `{ ...db, from }` looked equivalent and was not. Object spread copies OWN
+  // ENUMERABLE properties, and a Supabase client keeps its methods on the
+  // prototype — `channel`, `rpc`, `auth`, `storage`. Spreading kept the six
+  // config strings and dropped every method except the one being replaced, so
+  // the scraper died with "db.channel is not a function" the moment it tried
+  // to subscribe to realtime config changes.
+  //
+  // It failed at the FIRST call rather than silently, which is the one good
+  // thing about it. A quieter version of this bug would have been much worse.
+  //
+  // The Proxy forwards everything untouched. Two details matter:
+  //
+  //   `Reflect.get(target, prop, target)` passes the TARGET as the receiver,
+  //   not the proxy — a getter that reads a private `#field` throws if `this`
+  //   is anything but the real instance.
+  //
+  //   methods are bound to `target` for the same reason: calling
+  //   `proxy.channel()` would otherwise run with `this` set to the proxy.
+  return new Proxy(db, {
+    get(target, prop, _receiver) {
+      if (prop === 'from') {
+        return (table) => (tables.has(table) ? new Table(table) : target.from(table));
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
     },
-  };
+  });
 }
 
 module.exports = {

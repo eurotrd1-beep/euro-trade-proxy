@@ -289,3 +289,60 @@ test('a hub url with no secret routes nothing, rather than failing every call', 
   if (saved.url === undefined) delete process.env.DATA_HUB_URL; else process.env.DATA_HUB_URL = saved.url;
   if (saved.tables === undefined) delete process.env.DATA_HUB_TABLES; else process.env.DATA_HUB_TABLES = saved.tables;
 });
+
+/**
+ * Everything that is NOT `from` has to survive the wrapper.
+ *
+ * ── THE BUG THIS EXISTS FOR ────────────────────────────────────────────────
+ *
+ * The wrapper was `{ ...db, from }`, which looks equivalent and is not. Object
+ * spread copies own enumerable properties, and a Supabase client keeps its
+ * methods on the prototype — so the wrapper kept the six config strings and
+ * dropped `channel`, `rpc`, `auth` and `storage`. The scraper died with
+ * "db.channel is not a function" the first time it subscribed to realtime.
+ *
+ * The test above it passed the whole time, because it only ever asked about
+ * `from` — the one method the spread happened to keep. A wrapper has to be
+ * tested for what it leaves alone, not only for what it changes.
+ */
+test('the wrapper keeps every method the Supabase client has', () => {
+  const saved = {
+    url: process.env.DATA_HUB_URL,
+    secret: process.env.DATA_HUB_SERVICE_SECRET,
+    tables: process.env.DATA_HUB_TABLES,
+  };
+  process.env.DATA_HUB_URL = 'https://hub.example.com';
+  process.env.DATA_HUB_SERVICE_SECRET = 'secret';
+  process.env.DATA_HUB_TABLES = 'candles';
+
+  delete require.cache[require.resolve('../hub-client.js')];
+  const fresh = require('../hub-client.js');
+
+  const { createClient } = require('@supabase/supabase-js');
+  const real = createClient('https://example.supabase.co', 'test-key-not-real');
+  const wrapped = fresh.withHub(real);
+
+  // `channel` is the one that actually broke; the others are on the same
+  // prototype and would have gone with it.
+  for (const method of ['channel', 'rpc', 'removeChannel', 'getChannels']) {
+    assert.strictEqual(typeof wrapped[method], 'function', `${method} must survive`);
+  }
+  for (const namespace of ['auth', 'storage', 'functions', 'realtime']) {
+    assert.ok(wrapped[namespace], `${namespace} must survive`);
+  }
+
+  // And it must be callable, not merely present — a method pulled off the
+  // prototype with the wrong `this` throws on a private field.
+  const channel = wrapped.channel('probe');
+  assert.strictEqual(typeof channel.on, 'function');
+
+  // The one thing it does change, still changed.
+  assert.strictEqual(wrapped.from('candles').constructor.name, 'Table');
+  assert.notStrictEqual(wrapped.from('signals').constructor.name, 'Table');
+
+  delete require.cache[require.resolve('../hub-client.js')];
+  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret],
+                        ['DATA_HUB_TABLES', saved.tables]]) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
