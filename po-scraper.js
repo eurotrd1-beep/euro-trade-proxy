@@ -644,13 +644,18 @@ class PoWsClient {
 
   start() {
     if (!activeAuth) {
-      // No token yet. If we have credentials, try to auto-capture one; else ask
-      // for a manual capture. Either way the TradingView side is unaffected.
-      warn('no session token — ' + (PO_EMAIL && PO_PASSWORD
-        ? 'attempting automatic capture…'
-        : 'run get-po-ssid.js locally and set PO_AUTH (or set PO_EMAIL/PO_PASSWORD for auto-capture).'));
+      // No token yet. Try to mint one — ALWAYS, not only with credentials.
+      //
+      // `recaptureToken` tries the demo first, and the demo needs no email, no
+      // password, no captcha and no emailed PIN. Gating this call on
+      // credentials meant the one path that works without them could never
+      // run: a box with no token and no login sat asking for a manual capture
+      // while the thing that would have fixed it was one call away.
+      warn('no session token — attempting automatic capture' + (PO_EMAIL && PO_PASSWORD
+        ? ' (demo first, then the login)…'
+        : ' from the demo (no credentials set, so the login fallback is unavailable)…'));
       this._reportStatus({ connected: false, loggedIn: false, phase: 'login_failed', lastError: 'no session token' });
-      if (PO_EMAIL && PO_PASSWORD) this._repair();
+      this._repair();
       return;
     }
     this._connect();
@@ -860,7 +865,10 @@ class PoWsClient {
     // The token auths but never streams (priceFrames stays 0) ⇒ it's IP-bound to
     // the capture machine. Try ONCE to capture a token from the SERVER's own IP
     // (browser strike) — instrumented via repairDiag so we see if it works or OOMs.
-    if (this._flaps === 1 && this._priceFrames === 0 && PO_EMAIL && PO_PASSWORD && !this._triedRecapture) {
+    // Credentials are deliberately NOT required here either — see `start()`.
+    // The demo capture is the path that works on this account, and it needs
+    // none of them.
+    if (this._flaps === 1 && this._priceFrames === 0 && !this._triedRecapture) {
       this._triedRecapture = true;
       err('🟧 OTC: token auths but never streams (IP-bound). Minting a SERVER-IP token via HTTP login…');
       this._repair();                 // httpLogin first, browser fallback

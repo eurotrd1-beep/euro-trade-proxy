@@ -410,3 +410,36 @@ test('every table the proxy touches is in KNOWN', () => {
   assert.deepStrictEqual(missing, [],
     `these tables would still write Postgres: ${missing.join(', ')}`);
 });
+
+/**
+ * The demo capture must not be gated behind credentials.
+ *
+ * `recaptureToken` tries the demo first and the demo needs no email, no
+ * password, no captcha and no emailed PIN — the file's own comment says so, and
+ * says the PIN is exactly why the credential path can no longer finish on this
+ * account. Both callers of `_repair()` used to require PO_EMAIL and
+ * PO_PASSWORD, so the one path that works without them could never run: a box
+ * with no token and no login printed "run get-po-ssid.js locally" while the
+ * thing that would have fixed it was one call away.
+ *
+ * Asserted against the source because the alternative is booting a scraper and
+ * a headless Chromium inside a unit test.
+ */
+test('recapture is reachable without PO credentials', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'po-scraper.js'), 'utf8');
+
+  const callers = [...src.matchAll(/^.*this\._repair\(\).*$/gm)].map((m) => m[0]);
+  assert.ok(callers.length >= 2, 'expected the repair to be called from more than one place');
+
+  const gated = callers.filter((line) => /PO_EMAIL|PO_PASSWORD/.test(line));
+  assert.deepStrictEqual(gated, [],
+    'these call sites still require credentials, so the demo capture cannot run:\n' + gated.join('\n'));
+
+  // And the demo really is attempted before the credential path inside it.
+  const demoAt = src.indexOf('_captureDemo()');
+  const credAt = src.indexOf("warn('auto-recapture needs PO_EMAIL/PO_PASSWORD')");
+  assert.ok(demoAt > 0 && credAt > 0 && demoAt < credAt,
+    'the demo capture must be tried before the credential fallback');
+});
