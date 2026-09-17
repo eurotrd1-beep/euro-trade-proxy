@@ -733,15 +733,16 @@ function settlementFor(pending, lookup, now) {
 async function settlePending() {
   if (!db) return;
   try {
-    // Read directly rather than through `pending_signals`: the direction is
-    // needed to settle, and the outcome has to come from `outcomeFor` like
+    // Read through the pipeline, so it looks in whichever database the
+    // signals were RECORDED to. Reading Supabase directly while recording to
+    // D1 left every signal pending for ever, with no error anywhere: the pass
+    // ran, found nothing, and finding nothing is its normal state.
+    //
+    // Still the full row rather than the `pending_signals` view: the direction
+    // is needed to settle, and the outcome has to come from `outcomeFor` like
     // everywhere else. A row read without its direction could only be settled
     // by a second implementation of the rule.
-    const { data, error } = await db
-      .from('signals')
-      .select('id, symbol, direction, entry_price, bar_time, expiry_seconds')
-      .eq('outcome', 'pending')
-      .limit(500);
+    const { data, error } = await pipeline.pendingSignals();
     if (error) throw new Error(error.message);
 
     const rows = settlementFor(data ?? [], storeFor, Date.now());

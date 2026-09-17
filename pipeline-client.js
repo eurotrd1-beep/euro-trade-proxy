@@ -39,12 +39,12 @@ const useHub = () => HUB !== '' && SECRET !== '';
  * callers already branch on. A thrown error here would skip their logging and
  * their counters.
  */
-async function call(path, body) {
+async function call(path, body, method) {
   try {
     const res = await fetch(`${HUB}/v1/pipeline/${path}`, {
-      method: 'POST',
+      method: method || 'POST',
       headers: { 'Content-Type': 'application/json', 'x-service-secret': SECRET },
-      body: JSON.stringify(body),
+      body: body === null ? undefined : JSON.stringify(body),
       // A pipeline call that hangs holds up the whole generator tick. Thirty
       // seconds is far longer than any of these take and far shorter than a
       // stuck socket.
@@ -76,6 +76,11 @@ function createPipeline(db) {
   if (!useHub()) {
     return {
       target: 'supabase',
+      pendingSignals: () => db
+        .from('signals')
+        .select('id, symbol, direction, entry_price, bar_time, expiry_seconds')
+        .eq('outcome', 'pending')
+        .limit(500),
       recordSignals: (rows) => db.rpc('record_signals', { p_rows: rows }),
       resolveSignals: (rows) => db.rpc('resolve_signals', { p_rows: rows }),
       refreshDaily: (from, to) => db.rpc('refresh_signal_daily', { p_from: from, p_to: to }),
@@ -85,6 +90,40 @@ function createPipeline(db) {
 
   return {
     target: 'd1',
+
+    /**
+     * The signals still waiting to be settled.
+     *
+     * ── WHY THIS IS HERE AND NOT A DIRECT QUERY ───────────────────────────
+     *
+     * It was a direct Supabase query, and moving only the WRITES left the
+     * settlement pass looking in the wrong database: signals were recorded to
+     * D1 and searched for in Supabase, which had none. Every signal stayed
+     * `pending` for ever. Nothing errored — the pass ran on schedule, found
+     * nothing, and reported nothing, because finding nothing is its normal
+     * state most of the time.
+     *
+     * `bar_ms` is mapped back to `bar_time` so the settlement code above is
+     * handed the shape it already expects. That code decides outcomes and is
+     * not something to adjust for a storage detail.
+     */
+    async pendingSignals() {
+      const { data, error } = await call(
+        'pending',
+        null,
+        'GET',
+      );
+      if (error) return { data: null, error };
+      const rows = (data.rows || []).map((r) => ({
+        id: r.id,
+        symbol: r.symbol,
+        direction: r.direction,
+        entry_price: r.entry_price,
+        bar_time: r.bar_ms,
+        expiry_seconds: r.expiry_seconds,
+      }));
+      return { data: rows, error: null };
+    },
 
     /**
      * The RPC returned a one-row TABLE, so the caller reads `data[0]`. The hub

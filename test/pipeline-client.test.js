@@ -232,3 +232,63 @@ test('signal-generator loads when a database IS configured', () => {
     }
   }
 });
+
+/**
+ * The read the settlement pass makes.
+ *
+ * ── THE BUG THIS EXISTS FOR ────────────────────────────────────────────────
+ *
+ * Only the WRITES were moved. `settlePending()` kept querying Supabase
+ * directly, so signals were recorded to D1 and searched for in Supabase, which
+ * had none of them. Every signal stayed `pending` for ever.
+ *
+ * Nothing errored. The pass ran on schedule, found nothing, and reported
+ * nothing — and finding nothing is its normal state most of the time, so there
+ * was no moment at which the system looked wrong. It was visible only by
+ * noticing that signals expired nine minutes ago were still open.
+ *
+ * That is the same rule that caught `configs` earlier, in a place I missed:
+ * everything that touches a table has to agree on which database it is in.
+ */
+test('pendingSignals reads from the hub and hands back the expected shape', async () => {
+  const { createPipeline } = load({ url: 'https://hub.example', secret: 's' });
+  const calls = [];
+  global.fetch = fakeFetch(calls, {
+    rows: [{
+      id: 42, symbol: 'EURUSD_otc', direction: 'CALL',
+      entry_price: 1.2345, bar_ms: 1789622040000, expiry_seconds: 60,
+    }],
+  });
+
+  const { data, error } = await createPipeline(null).pendingSignals();
+  assert.equal(error, null);
+  assert.equal(data.length, 1);
+
+  // `bar_time` — not `bar_ms`. The settlement code above decides outcomes and
+  // must not be adjusted for a storage detail, so the mapping happens here.
+  assert.equal(data[0].bar_time, 1789622040000);
+  assert.equal(data[0].bar_ms, undefined);
+  assert.equal(data[0].direction, 'CALL', 'direction is required to settle');
+  assert.equal(data[0].entry_price, 1.2345);
+
+  assert.match(calls[0].url, /\/v1\/pipeline\/pending$/);
+  assert.equal(calls[0].init.method, 'GET');
+});
+
+test('pendingSignals reads Supabase when the hub is not configured', async () => {
+  const { createPipeline } = load({});
+  const calls = [];
+  const db = {
+    from(table) {
+      calls.push(table);
+      const q = {
+        select: () => q,
+        eq: (col, val) => { calls.push(`${col}=${val}`); return q; },
+        limit: (n) => { calls.push(`limit=${n}`); return { data: [], error: null }; },
+      };
+      return q;
+    },
+  };
+  createPipeline(db).pendingSignals();
+  assert.deepEqual(calls, ['signals', 'outcome=pending', 'limit=500']);
+});
