@@ -62,24 +62,6 @@ function fakeFetch(calls, body, status = 200) {
   };
 }
 
-test('with no hub configured it uses Supabase, unchanged', async () => {
-  const { createPipeline } = load({});
-  const calls = [];
-  const p = createPipeline(fakeDb(calls));
-
-  assert.equal(p.target, 'supabase');
-  await p.recordSignals([{ symbol: 'EURUSD_otc' }]);
-  await p.resolveSignals([{ id: 1 }]);
-  await p.refreshDaily('2026-09-01', '2026-09-17');
-  await p.pruneSignals(30);
-
-  assert.deepEqual(calls.map((c) => c[0]), [
-    'record_signals', 'resolve_signals', 'refresh_signal_daily', 'prune_signals',
-  ]);
-  // The argument NAMES matter: the RPC is positional by keyword.
-  assert.deepEqual(calls[2][1], { p_from: '2026-09-01', p_to: '2026-09-17' });
-  assert.deepEqual(calls[3][1], { p_keep_days: 30 });
-});
 
 test('half a configuration is not a configuration', async () => {
   // A URL with no secret would reach the hub and be refused on every call,
@@ -275,20 +257,3 @@ test('pendingSignals reads from the hub and hands back the expected shape', asyn
   assert.equal(calls[0].init.method, 'GET');
 });
 
-test('pendingSignals reads Supabase when the hub is not configured', async () => {
-  const { createPipeline } = load({});
-  const calls = [];
-  const db = {
-    from(table) {
-      calls.push(table);
-      const q = {
-        select: () => q,
-        eq: (col, val) => { calls.push(`${col}=${val}`); return q; },
-        limit: (n) => { calls.push(`limit=${n}`); return { data: [], error: null }; },
-      };
-      return q;
-    },
-  };
-  createPipeline(db).pendingSignals();
-  assert.deepEqual(calls, ['signals', 'outcome=pending', 'limit=500']);
-});

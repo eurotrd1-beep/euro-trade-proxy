@@ -21,7 +21,7 @@ if (typeof globalThis.WebSocket === 'undefined') {
  *  `get-po-ssid.js`, then set on Render:
  *     PO_WS_URL  — the websocket URL PO uses
  *     PO_AUTH    — the auth handshake frame (e.g. ["auth",{...}])  (session token)
- *  Shared with the TradingView side: SUPABASE_URL, SUPABASE_SERVICE_KEY.
+ *  Persistence goes to the data hub: DATA_HUB_URL, DATA_HUB_SERVICE_SECRET.
  *
  *  Everything platform-specific lives in `PoProtocol` (frame parsing / symbols)
  *  so another OTC platform later is just a new protocol object.
@@ -29,8 +29,6 @@ if (typeof globalThis.WebSocket === 'undefined') {
  */
 
 const WebSocketLib = require('ws');
-let createClient;
-try { ({ createClient } = require('@supabase/supabase-js')); } catch (_) {}
 
 // ── Config (env only) ────────────────────────────────────────────────────────
 const PO_AUTH      = (process.env.PO_AUTH || process.env.PO_SSID || '').trim();
@@ -51,8 +49,6 @@ const CAPTCHA_API_KEY = process.env.CAPTCHA_API_KEY || process.env.TWOCAPTCHA_AP
 // persisted to Supabase so a restart reuses the freshest token).
 let activeAuth  = PO_AUTH;
 let activeWsUrl = PO_WS_URL;
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
 // ── Keep-alive tuning (override with the REAL frames captured by get-po-ssid.js) ──
 // PO_HEARTBEAT : JSON array of extra Engine.IO frames to send each beat, e.g.
@@ -177,23 +173,15 @@ const err  = (...a) => console.error('[OTC]', ...a);
 
 // ── The database ─────────────────────────────────────────────────────────────
 //
-// `withHub` is required HERE, above the block that uses it, and not down with
-// the other requires. `const` is hoisted into a temporal dead zone, so a
-// declaration placed after its use throws "Cannot access before initialization"
-// — which is exactly how the signal generator was silently dead for two hours.
-const { withHub } = require('./hub-client.js');
+// Required HERE, above the line that uses it, and not down with the other
+// requires. `const` is hoisted into a temporal dead zone, so a declaration
+// placed after its use throws "Cannot access before initialization" — which is
+// exactly how the signal generator was silently dead for two hours.
+const { createDb } = require('./hub-client.js');
 
-let db = null;
-if (createClient && SUPABASE_URL && SUPABASE_KEY) {
-  db = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
-  log('Supabase initialized');
-} else {
-  warn('Supabase not configured — OTC scraper will run without persistence');
-}
-
-// Tables named in DATA_HUB_TABLES go to D1 through the hub; everything else
-// stays on the client above. Unset, this returns that client unchanged.
-db = withHub(db);
+const db = createDb();
+if (db) log('data hub initialized');
+else warn('data hub not configured — OTC scraper will run without persistence');
 
 // ════════════════════════════════════════════════════════════════════════════
 //  Asset policy — what this system is allowed to see

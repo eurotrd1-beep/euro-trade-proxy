@@ -157,44 +157,79 @@ test('a catalogue upsert is split into whole rows', () => {
   for (const p of pieces) assert.ok(p.length <= MAX_ROWS);
 });
 
-// ── The switch ──────────────────────────────────────────────────────────────
+// ── The client ──────────────────────────────────────────────────────────────
 
-test('nothing is routed when the variable is unset', () => {
-  delete process.env.DATA_HUB_TABLES;
-  assert.strictEqual(_internals.selected().size, 0);
-});
+test('it is the client, with no second destination to choose', () => {
+  const saved = { url: process.env.DATA_HUB_URL, secret: process.env.DATA_HUB_SERVICE_SECRET };
+  process.env.DATA_HUB_URL = 'https://hub.example.com';
+  process.env.DATA_HUB_SERVICE_SECRET = 'secret';
+  delete require.cache[require.resolve('../hub-client.js')];
+  const fresh = require('../hub-client.js');
 
-test('a named list routes exactly those tables', () => {
-  process.env.DATA_HUB_TABLES = 'telegram_alerts, captcha_stats';
-  const s = _internals.selected();
-  assert.ok(s.has('telegram_alerts'));
-  assert.ok(s.has('captcha_stats'));
-  assert.ok(!s.has('candles'), 'the expensive one stays put until it is named');
-  delete process.env.DATA_HUB_TABLES;
-});
+  const db = fresh.createDb();
+  assert.ok(db, 'a configured client');
+  assert.strictEqual(db.from('candles').constructor.name, 'Table');
+  assert.strictEqual(db.from('configs').constructor.name, 'Table');
 
-test('"all" routes every table the client can translate', () => {
-  process.env.DATA_HUB_TABLES = 'all';
-  const s = _internals.selected();
-  for (const t of ['candles', 'configs', 'otc_pairs', 'push_subscriptions', 'telegram_alerts']) {
-    assert.ok(s.has(t), t);
+  delete require.cache[require.resolve('../hub-client.js')];
+  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret]]) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
-  delete process.env.DATA_HUB_TABLES;
 });
 
-test('the unconfigured client is the Supabase client itself, not a copy of it', () => {
-  // Identity, not equivalence. A wrapper that is "the same" in the untested
-  // path is a second implementation waiting to differ.
-  delete process.env.DATA_HUB_TABLES;
-  const { withHub } = require('../hub-client.js');
-  const db = { from: () => 'supabase-chain' };
-  assert.strictEqual(withHub(db), db);
+test('a table with no route throws instead of going somewhere by default', () => {
+  // The version of this that fell back to Postgres is exactly how `push_alerts`
+  // wrote the wrong database for a day without anyone noticing.
+  const saved = { url: process.env.DATA_HUB_URL, secret: process.env.DATA_HUB_SERVICE_SECRET };
+  process.env.DATA_HUB_URL = 'https://hub.example.com';
+  process.env.DATA_HUB_SERVICE_SECRET = 'secret';
+  delete require.cache[require.resolve('../hub-client.js')];
+  const db = require('../hub-client.js').createDb();
+
+  assert.throws(() => db.from('some_table_nobody_declared'), /no route for table/);
+
+  delete require.cache[require.resolve('../hub-client.js')];
+  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret]]) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
 });
 
-test('a null client stays null', () => {
-  const { withHub } = require('../hub-client.js');
-  assert.strictEqual(withHub(null), null);
+test('without a hub it is null, which every call site already checks for', () => {
+  // `if (!db) return` appears throughout and used to mean "no Supabase". It
+  // means "no hub" now and guards the same behaviour: the scraper runs, prices
+  // flow, nothing is persisted.
+  const saved = { url: process.env.DATA_HUB_URL, secret: process.env.DATA_HUB_SERVICE_SECRET };
+  delete process.env.DATA_HUB_URL;
+  delete process.env.DATA_HUB_SERVICE_SECRET;
+  delete require.cache[require.resolve('../hub-client.js')];
+  assert.strictEqual(require('../hub-client.js').createDb(), null);
+
+  delete require.cache[require.resolve('../hub-client.js')];
+  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret]]) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
 });
+
+test('no file in the proxy builds a Supabase client any more', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(__dirname, '..');
+  const offenders = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
+    const code = fs.readFileSync(path.join(dir, file), 'utf8')
+      .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    if (/createClient\s*\(|@supabase\/supabase-js/.test(code)) offenders.push(file);
+  }
+  // `get-po-ssid.js` and `run-otc.js` are run by hand on a laptop, not by the
+  // service, and are allowed to mention whatever they like.
+  assert.deepStrictEqual(offenders.filter((f) => !['get-po-ssid.js', 'run-otc.js'].includes(f)), []);
+});
+
+
+
+
+
+
 
 // ── Loading ─────────────────────────────────────────────────────────────────
 
@@ -243,142 +278,9 @@ test('po-scraper loads when a database IS configured', () => {
   }
 });
 
-test('the wrapper routes only the tables it was given', () => {
-  const { withHub } = require('../hub-client.js');
-  const saved = {
-    url: process.env.DATA_HUB_URL,
-    secret: process.env.DATA_HUB_SERVICE_SECRET,
-    tables: process.env.DATA_HUB_TABLES,
-  };
-  process.env.DATA_HUB_URL = 'https://hub.example.com';
-  process.env.DATA_HUB_SERVICE_SECRET = 'secret';
-  process.env.DATA_HUB_TABLES = 'telegram_alerts';
 
-  // Re-required so the module-level HUB/SECRET constants pick the values up.
-  delete require.cache[require.resolve('../hub-client.js')];
-  const fresh = require('../hub-client.js');
 
-  const supabase = { from: (t) => ({ marker: 'supabase', table: t }) };
-  const routed = fresh.withHub(supabase);
 
-  assert.strictEqual(routed.from('candles').marker, 'supabase', 'candles stays put');
-  assert.notStrictEqual(routed.from('telegram_alerts').marker, 'supabase', 'the named one moves');
-
-  delete require.cache[require.resolve('../hub-client.js')];
-  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret],
-                        ['DATA_HUB_TABLES', saved.tables]]) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  void withHub;
-});
-
-test('a hub url with no secret routes nothing, rather than failing every call', () => {
-  const saved = { url: process.env.DATA_HUB_URL, tables: process.env.DATA_HUB_TABLES };
-  process.env.DATA_HUB_URL = 'https://hub.example.com';
-  delete process.env.DATA_HUB_SERVICE_SECRET;
-  process.env.DATA_HUB_TABLES = 'all';
-
-  delete require.cache[require.resolve('../hub-client.js')];
-  const fresh = require('../hub-client.js');
-  const supabase = { from: () => ({ marker: 'supabase' }) };
-  assert.strictEqual(fresh.withHub(supabase), supabase,
-    'half-configured must mean "stay where you are", not "be refused on every call"');
-
-  delete require.cache[require.resolve('../hub-client.js')];
-  if (saved.url === undefined) delete process.env.DATA_HUB_URL; else process.env.DATA_HUB_URL = saved.url;
-  if (saved.tables === undefined) delete process.env.DATA_HUB_TABLES; else process.env.DATA_HUB_TABLES = saved.tables;
-});
-
-/**
- * Everything that is NOT `from` has to survive the wrapper.
- *
- * ── THE BUG THIS EXISTS FOR ────────────────────────────────────────────────
- *
- * The wrapper was `{ ...db, from }`, which looks equivalent and is not. Object
- * spread copies own enumerable properties, and a Supabase client keeps its
- * methods on the prototype — so the wrapper kept the six config strings and
- * dropped `channel`, `rpc`, `auth` and `storage`. The scraper died with
- * "db.channel is not a function" the first time it subscribed to realtime.
- *
- * The test above it passed the whole time, because it only ever asked about
- * `from` — the one method the spread happened to keep. A wrapper has to be
- * tested for what it leaves alone, not only for what it changes.
- */
-test('the wrapper keeps every method the Supabase client has', () => {
-  const saved = {
-    url: process.env.DATA_HUB_URL,
-    secret: process.env.DATA_HUB_SERVICE_SECRET,
-    tables: process.env.DATA_HUB_TABLES,
-  };
-  process.env.DATA_HUB_URL = 'https://hub.example.com';
-  process.env.DATA_HUB_SERVICE_SECRET = 'secret';
-  process.env.DATA_HUB_TABLES = 'candles';
-
-  delete require.cache[require.resolve('../hub-client.js')];
-  const fresh = require('../hub-client.js');
-
-  const { createClient } = require('@supabase/supabase-js');
-  const real = createClient('https://example.supabase.co', 'test-key-not-real');
-  const wrapped = fresh.withHub(real);
-
-  // `channel` is the one that actually broke; the others are on the same
-  // prototype and would have gone with it.
-  for (const method of ['channel', 'rpc', 'removeChannel', 'getChannels']) {
-    assert.strictEqual(typeof wrapped[method], 'function', `${method} must survive`);
-  }
-  for (const namespace of ['auth', 'storage', 'functions', 'realtime']) {
-    assert.ok(wrapped[namespace], `${namespace} must survive`);
-  }
-
-  // And it must be callable, not merely present — a method pulled off the
-  // prototype with the wrong `this` throws on a private field.
-  const channel = wrapped.channel('probe');
-  assert.strictEqual(typeof channel.on, 'function');
-
-  // The one thing it does change, still changed.
-  assert.strictEqual(wrapped.from('candles').constructor.name, 'Table');
-  assert.notStrictEqual(wrapped.from('signals').constructor.name, 'Table');
-
-  delete require.cache[require.resolve('../hub-client.js')];
-  for (const [k, v] of [['DATA_HUB_URL', saved.url], ['DATA_HUB_SERVICE_SECRET', saved.secret],
-                        ['DATA_HUB_TABLES', saved.tables]]) {
-    if (v === undefined) delete process.env[k]; else process.env[k] = v;
-  }
-});
-
-/**
- * Every Supabase client in this process has to be routed.
- *
- * Two of the three were wrapped and the third was not: `signal-generator.js`
- * builds its own client and hands it to `telegram.js` and `push.js`, which
- * write `telegram_alerts` and `push_subscriptions` on their own behalf. Those
- * three tables kept going to Postgres while everything around them moved — the
- * exact split the migration exists to prevent, where the admin changes a
- * setting in one database and the code that obeys it reads the other.
- *
- * Counting `createClient` against `withHub` is crude and it is the check that
- * would have caught it. A fourth client added later fails this immediately.
- */
-test('every createClient in the proxy is handed to withHub', () => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const dir = path.join(__dirname, '..');
-
-  const offenders = [];
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
-    if (file === 'hub-client.js') continue;
-    const src = fs.readFileSync(path.join(dir, file), 'utf8');
-    // Ignore commented-out lines so prose about the client is not counted.
-    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
-    const creates = (code.match(/createClient\s*\(/g) || []).length;
-    if (creates === 0) continue;
-    const wraps = (code.match(/withHub\s*\(/g) || []).length;
-    if (wraps < 1) offenders.push(`${file}: creates a client and never calls withHub`);
-  }
-
-  assert.deepStrictEqual(offenders, [], offenders.join('\n'));
-});
 
 /**
  * Every table this repository reads or writes must be routable.

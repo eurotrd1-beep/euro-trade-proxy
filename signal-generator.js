@@ -38,7 +38,7 @@
  *
  * ── THE CONSTRAINTS THAT SHAPED IT ─────────────────────────────────────────
  *
- * READS NOTHING FROM SUPABASE IN STEADY STATE. Candles come from the scraper's
+ * READS NO DATABASE IN STEADY STATE. Candles come from the scraper's
  * in-memory store (`global.otcClient.store.candles`) and prices from
  * `global.otcPrices`, both of which this process already maintains. A 30s poll
  * of candle rows once burned 5.6GB of egress in two days; that mistake is not
@@ -135,41 +135,28 @@ const err = (...a) => console.error('[signals]', ...a);
 const { createPipeline } = require('./pipeline-client.js');
 let pipeline = null;
 
-// ── Supabase (service role — this process is the only writer) ───────────────
-
-const { withHub } = require('./hub-client.js');
-
-let db = null;
-try {
-  const { createClient } = require('@supabase/supabase-js');
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  if (url && key) db = createClient(url, key, { auth: { persistSession: false } });
-} catch (e) {
-  err('supabase client unavailable:', e.message);
-}
-
-// ── Routed, like the other two ───────────────────────────────────────────────
+// ── The database ────────────────────────────────────────────────────────────
 //
-// This was the THIRD client and the one that was missed. Wrapping the scraper
-// and the server covered everything they write themselves, but this object is
-// handed to two modules that write on their own behalf:
+// Handed to two modules that write on their own behalf:
 //
 //   createTelegram({ db })  → telegram_alerts, and reads configs.telegram
 //   push.broadcast(db, …)   → push_subscriptions
 //
-// So those three tables kept going to Postgres while everything around them
-// moved, which is the exact split the migration exists to avoid: the admin
-// changes a Telegram setting in one database and the code that obeys it reads
-// the other, with nothing erroring on either side.
+// This was the third client in the process and the one that was missed when
+// the tables moved: wrapping the scraper and the server covered what THEY
+// write, and left these three going to Postgres while everything around them
+// had moved. The admin would change a Telegram setting in one database and the
+// code that obeys it would read the other, with nothing erroring on either
+// side.
 //
-// The pipeline below is unaffected either way — it talks to the hub directly
-// through its own credentials and never used this client for the four
-// functions.
-db = withHub(db);
+// The signal pipeline below does not use this client — it talks to the hub
+// through its own credentials.
+const { createDb } = require('./hub-client.js');
+
+const db = createDb();
 
 if (db) {
-  pipeline = createPipeline(db);
+  pipeline = createPipeline();
   log(`خط الإشارات بيكتب على: ${pipeline.target}`);
 }
 
@@ -830,7 +817,7 @@ async function start() {
     return;
   }
   if (!db) {
-    err('مفيش SUPABASE_SERVICE_KEY — المولّد مش هيشتغل');
+    err('مفيش DATA_HUB_URL / DATA_HUB_SERVICE_SECRET — المولّد مش هيشتغل');
     return;
   }
 

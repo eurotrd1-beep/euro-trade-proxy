@@ -68,26 +68,13 @@ async function call(path, body, method) {
 /**
  * Builds the four calls against `db` (Supabase) or the hub.
  *
- * `db` is still required for the Supabase path, and passing it in rather than
- * importing it keeps this file free of the client setup — it is the same
- * client the rest of the generator already holds.
+ * It used to take the generator's database client, because without the hub
+ * configured the four calls went to Postgres functions of the same names. There
+ * is no Postgres, so it takes nothing: the hub is the only destination, and a
+ * missing configuration is an error at startup rather than a silent second
+ * path.
  */
-function createPipeline(db) {
-  if (!useHub()) {
-    return {
-      target: 'supabase',
-      pendingSignals: () => db
-        .from('signals')
-        .select('id, symbol, direction, entry_price, bar_time, expiry_seconds')
-        .eq('outcome', 'pending')
-        .limit(500),
-      recordSignals: (rows) => db.rpc('record_signals', { p_rows: rows }),
-      resolveSignals: (rows) => db.rpc('resolve_signals', { p_rows: rows }),
-      refreshDaily: (from, to) => db.rpc('refresh_signal_daily', { p_from: from, p_to: to }),
-      pruneSignals: (keepDays) => db.rpc('prune_signals', { p_keep_days: keepDays }),
-    };
-  }
-
+function createPipeline() {
   return {
     target: 'd1',
 

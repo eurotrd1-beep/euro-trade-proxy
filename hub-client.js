@@ -390,63 +390,40 @@ const KNOWN = [
   'clicks', 'pairs', 'users', 'brokers', 'signals', 'signal_history',
 ];
 
+/** Kept for the tests that assert the table list is complete. */
 function selected() {
-  const raw = (process.env.DATA_HUB_TABLES || '').trim();
-  if (!raw) return new Set();
-  if (raw === 'all' || raw === '1') return new Set(KNOWN);
-  return new Set(raw.split(',').map((t) => t.trim()).filter(Boolean));
+  return new Set(KNOWN);
 }
 
 /**
- * Wraps the Supabase client so each table goes wherever it is configured to.
+ * The database, as the call sites see it.
  *
- * Returns the original client untouched when nothing is selected, so the
- * unconfigured path is not merely equivalent to the old one — it IS the old
- * one, with no wrapper in between to be wrong.
+ * Returns null when the hub is not configured, which is what every call site
+ * already checks for — `if (!db) return` appears throughout, and used to mean
+ * "no Supabase". It means "no hub" now, and the behaviour it guards is the
+ * same: the scraper runs, prices flow, nothing is persisted.
  */
-function withHub(db) {
-  if (!db) return db;
-  if (!HUB || !SECRET) return db;
-
-  const tables = selected();
-  if (tables.size === 0) return db;
-
-  const routed = [...tables].sort().join(', ');
-  console.log(`[hub] tables on D1: ${routed}`);
-
-  // ── A Proxy, not a spread ────────────────────────────────────────────────
-  //
-  // `{ ...db, from }` looked equivalent and was not. Object spread copies OWN
-  // ENUMERABLE properties, and a Supabase client keeps its methods on the
-  // prototype — `channel`, `rpc`, `auth`, `storage`. Spreading kept the six
-  // config strings and dropped every method except the one being replaced, so
-  // the scraper died with "db.channel is not a function" the moment it tried
-  // to subscribe to realtime config changes.
-  //
-  // It failed at the FIRST call rather than silently, which is the one good
-  // thing about it. A quieter version of this bug would have been much worse.
-  //
-  // The Proxy forwards everything untouched. Two details matter:
-  //
-  //   `Reflect.get(target, prop, target)` passes the TARGET as the receiver,
-  //   not the proxy — a getter that reads a private `#field` throws if `this`
-  //   is anything but the real instance.
-  //
-  //   methods are bound to `target` for the same reason: calling
-  //   `proxy.channel()` would otherwise run with `this` set to the proxy.
-  return new Proxy(db, {
-    get(target, prop, _receiver) {
-      if (prop === 'from') {
-        return (table) => (tables.has(table) ? new Table(table) : target.from(table));
+function createDb() {
+  if (!HUB || !SECRET) {
+    console.warn('[hub] DATA_HUB_URL / DATA_HUB_SERVICE_SECRET not set — running without persistence');
+    return null;
+  }
+  return {
+    from(table) {
+      if (!KNOWN.includes(table)) {
+        // Louder than routing it somewhere by default. A table nobody declared
+        // has no destination, and the version of this that fell back to
+        // Postgres is exactly how `push_alerts` kept writing the wrong
+        // database for a day without anyone noticing.
+        throw new Error(`[hub] no route for table '${table}' — add it to KNOWN in hub-client.js`);
       }
-      const value = Reflect.get(target, prop, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+      return new Table(table);
     },
-  });
+  };
 }
 
 module.exports = {
-  withHub,
+  createDb,
   // Exported for the tests, which check the translation rather than the wire.
   _internals: { ALIASES, JSON_COLUMNS, MAX_IN, MAX_ROWS, aliasOut, aliasIn, outRow, inRow, chunk, selected },
 };

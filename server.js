@@ -8,27 +8,11 @@ const { createHubFeed } = require('./price-hub-feed.js');
 const push = require('./push.js');
 
 // ── The database (candles + pairs + OTC status) ───────────────────────────────
-const { withHub } = require('./hub-client.js');
+const { createDb } = require('./hub-client.js');
 
-let db = null;
-try {
-  const { createClient } = require('@supabase/supabase-js');
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  if (url && key) {
-    db = createClient(url, key);
-    console.log('[Supabase] initialized');
-  } else {
-    console.warn('[Supabase] SUPABASE_URL / SUPABASE_SERVICE_KEY not set — DB features disabled');
-  }
-} catch (e) {
-  console.error('[Supabase] init failed:', e.message);
-}
-
-// Tables named in DATA_HUB_TABLES go to D1 through the hub. `push.js` and
-// `telegram.js` are handed this same object, so wrapping the two creation
-// sites covers every call site in the process.
-db = withHub(db);
+// `push.js` and `telegram.js` are handed this same object, so one client here
+// covers every call site in the process.
+const db = createDb();
 
 
 // ── Browser WebSocket clients (OTC live price feed) ───────────────────────────
@@ -345,30 +329,6 @@ const server = http.createServer(async (req, res) => {
       if (bal == null) { const f = parseFloat(r.body); if (isFinite(f)) bal = f; }
       if (bal == null) { json({ available: false, reason: 'رد غير متوقع من 2captcha', raw: r.body.slice(0, 80) }); return; }
       json({ available: true, balance: bal, currency: 'USD' });
-    } catch (e) { json({ available: false, reason: e.message }); }
-    return;
-  }
-
-  // ── GET /api/supabase-usage — project status + usage via Management API ───────
-  if (url.pathname === '/api/supabase-usage') {
-    const token = process.env.SUPABASE_MGMT_TOKEN || '';
-    const ref = (process.env.SUPABASE_URL || '').replace(/^https?:\/\//, '').split('.')[0];
-    if (!token) { json({ available: false, reason: 'SUPABASE_MGMT_TOKEN غير مضبوط' }); return; }
-    if (!ref)   { json({ available: false, reason: 'تعذّر استخراج ref المشروع' }); return; }
-    try {
-      const auth = { Authorization: 'Bearer ' + token };
-      const proj = await httpsRequest(`https://api.supabase.com/v1/projects/${ref}`, { headers: auth, timeoutMs: 15000 });
-      if (proj.status === 401) { json({ available: false, reason: 'التوكن غير صالح (401)' }); return; }
-      let projectStatus = null;
-      try { projectStatus = JSON.parse(proj.body).status; } catch (_) {}
-      let usage = null, usageError = null;
-      try {
-        const u = await httpsRequest(`https://api.supabase.com/v1/projects/${ref}/usage`, { headers: auth, timeoutMs: 15000 });
-        if (u.status === 200) usage = JSON.parse(u.body);
-        else if (u.status === 404) usageError = 'الاستهلاك التفصيلي متاح على الداشبورد فقط (مش عبر الـ API)';
-        else usageError = 'HTTP ' + u.status;
-      } catch (e) { usageError = e.message; }
-      json({ available: true, projectStatus, usage, usageError });
     } catch (e) { json({ available: false, reason: e.message }); }
     return;
   }
